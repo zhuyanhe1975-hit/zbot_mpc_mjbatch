@@ -17,6 +17,13 @@ def test_copied_zbot_model_stands_in_batched_mujoco():
     assert trace.base_pos_w.shape == (50, 4, 3)
     assert trace.foot_pos_w.shape == (50, 4, 2, 3)
     assert trace.foot_contacts.shape == (50, 4, 2)
+    assert trace.com_pos_w.shape == (50, 4, 3)
+    assert trace.foot_cop_w.shape == (50, 4, 2, 2)
+    assert trace.foot_clearance_m.shape == (50, 4, 2)
+    assert trace.foot_foot_distance_m.shape == (50, 4)
+    assert not trace.foot_foot_contact.any()
+    assert np.isfinite(trace.com_pos_w).all()
+    assert np.isfinite(trace.foot_cop_w[trace.foot_normal_force_n > 1.0]).all()
     assert np.isfinite(trace.base_pos_w).all()
     assert trace.base_pos_w[:, :, 2].min() > 0.2
     assert trace.foot_contacts[-1].all()

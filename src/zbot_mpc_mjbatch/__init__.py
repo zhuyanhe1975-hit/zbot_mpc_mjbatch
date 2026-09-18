@@ -2,6 +2,7 @@
 
 from .cadence import CadenceStateMachine, Phase, StepState
 from .model import load_model, standing_joint_targets
+from .mpc import StepMPC, StepPlan
 from .rollout import BatchRollout, RolloutTrace
 
 __all__ = [
@@ -10,6 +11,8 @@ __all__ = [
     "Phase",
     "RolloutTrace",
     "StepState",
+    "StepMPC",
+    "StepPlan",
     "load_model",
     "standing_joint_targets",
 ]

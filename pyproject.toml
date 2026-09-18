@@ -11,6 +11,8 @@ dependencies = ["mjbatch", "mujoco==3.11.0", "numpy"]
 
 [project.scripts]
 zbot-mpc-smoke = "zbot_mpc_mjbatch.smoke:main"
+zbot-mpc-step = "zbot_mpc_mjbatch.stepping:main"
+zbot-mpc-visualize = "zbot_mpc_mjbatch.visualize:main"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]

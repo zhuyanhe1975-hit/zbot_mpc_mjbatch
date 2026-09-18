@@ -30,10 +30,21 @@
   </actuator>
 
   <sensor>
+    <distance name="foot_0_clearance" geom1="floor" geom2="foot_0_collisions" cutoff="0.1"/>
+    <distance name="foot_1_clearance" geom1="floor" geom2="foot_1_collisions" cutoff="0.1"/>
+    <distance name="foot_foot_distance" geom1="foot_0_collisions" geom2="foot_1_collisions" cutoff="0.1"/>
+    <fromto name="foot_foot_fromto" geom1="foot_0_collisions" geom2="foot_1_collisions" cutoff="0.1"/>
     <contact name="foot_0_contact" geom1="floor" geom2="foot_0_collisions" data="found" num="1" reduce="mindist"/>
     <contact name="foot_1_contact" geom1="floor" geom2="foot_1_collisions" data="found" num="1" reduce="mindist"/>
+    <contact name="foot_foot_contact" geom1="foot_0_collisions" geom2="foot_1_collisions" data="found" num="1" reduce="mindist"/>
     <contact name="foot_0_force" geom1="floor" geom2="foot_0_collisions" data="force" num="1" reduce="mindist"/>
     <contact name="foot_1_force" geom1="floor" geom2="foot_1_collisions" data="force" num="1" reduce="mindist"/>
+    <contact name="foot_0_net_pos" geom1="floor" geom2="foot_0_collisions" data="pos" num="1" reduce="netforce"/>
+    <contact name="foot_0_net_force" geom1="floor" geom2="foot_0_collisions" data="force" num="1" reduce="netforce"/>
+    <contact name="foot_0_net_torque" geom1="floor" geom2="foot_0_collisions" data="torque" num="1" reduce="netforce"/>
+    <contact name="foot_1_net_pos" geom1="floor" geom2="foot_1_collisions" data="pos" num="1" reduce="netforce"/>
+    <contact name="foot_1_net_force" geom1="floor" geom2="foot_1_collisions" data="force" num="1" reduce="netforce"/>
+    <contact name="foot_1_net_torque" geom1="floor" geom2="foot_1_collisions" data="torque" num="1" reduce="netforce"/>
   </sensor>
 
   <keyframe>

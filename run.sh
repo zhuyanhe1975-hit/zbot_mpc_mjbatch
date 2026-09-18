@@ -2,4 +2,4 @@
 set -euo pipefail
 
 cd "$(dirname "$(realpath "$0")")"
-exec uv run --no-sync zbot-mpc-smoke "$@"
+exec uv run --no-sync python -m zbot_mpc_mjbatch.stepping "$@"
