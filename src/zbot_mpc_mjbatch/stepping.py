@@ -5,13 +5,13 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import numpy as np
 
 from .cadence import CadenceStateMachine, Phase
 from .model import load_model
-from .mpc import StepMPC, StepPlan
+from .mpc import MIN_SINGLE_SUPPORT_FORCE_N, StepMPC, StepPlan
 from .rollout import BatchRollout
 
 
@@ -37,8 +37,9 @@ class StepRun:
     landing_times_s: np.ndarray
     plans: tuple[StepPlan, ...]
     wall_seconds: float
+    stop_reason: str | None = None
 
-    def summary(self) -> dict[str, float | int | bool | None]:
+    def summary(self) -> dict[str, float | int | bool | str | None]:
         initial_xy = self.base_pos_w[0, :2]
         drift = np.linalg.norm(self.base_pos_w[:, :2] - initial_xy, axis=1)
         support = 1 - self.swing_feet
@@ -48,34 +49,67 @@ class StepRun:
         com_margins = self.support_com_margin_m[single]
         cop_margins = self.support_cop_margin_m[single]
         cop_margins = cop_margins[np.isfinite(cop_margins)]
+        support_contacts_all = self.foot_contacts[np.arange(len(support)), support]
+        single_support_forces = self.foot_normal_force_n[np.arange(len(support)), support][single]
         dt = float(self.times_s[0])
         boundaries = np.searchsorted(self.times_s, self.landing_times_s, side="right")
+        maximum_support_motion = 0.0
+        for step_start, step_end in zip(
+            np.r_[0, boundaries], np.r_[boundaries, len(self.times_s)], strict=True
+        ):
+            if step_start == step_end:
+                continue
+            stance = 1 - int(self.swing_feet[step_start])
+            foot_xy = self.foot_pos_w[step_start:step_end, stance, :2]
+            maximum_support_motion = max(
+                maximum_support_motion,
+                float(np.linalg.norm(foot_xy - foot_xy[0], axis=1).max()),
+            )
         peak_clearances: list[float] = []
         clear_runs: list[float] = []
         support_contacts: list[float] = []
+        all_phase_support_contacts: list[float] = []
         support_motions: list[float] = []
         support_forces: list[float] = []
-        for start, end in zip(np.r_[0, boundaries[:-1]], boundaries, strict=True):
+        for index, end in enumerate(boundaries):
+            start = 0 if index == 0 else boundaries[index - 1]
             held = np.array([phase == Phase.HOLD for phase in self.phases[start:end]])
             if not held.any():
                 continue
             swing = int(self.swing_feet[start])
             support_foot = 1 - swing
-            clearance = self.foot_clearance_m[start:end, swing][held]
+            clearance = self.foot_clearance_m[start:end, swing]
             above = np.r_[False, clearance >= 0.003, False].astype(np.int8)
             changes = np.diff(above)
             run_lengths = np.where(changes == -1)[0] - np.where(changes == 1)[0]
             clear_runs.append(float(np.max(run_lengths, initial=0) * dt))
             peak_clearances.append(float(clearance.max()))
             support_contacts.append(float(self.foot_contacts[start:end, support_foot][held].mean()))
-            positions = self.foot_pos_w[start:end, support_foot, :2][held]
+            all_phase_support_contacts.append(
+                float(self.foot_contacts[start:end, support_foot].mean())
+            )
+            positions = self.foot_pos_w[start:end, support_foot, :2]
             support_motions.append(float(np.linalg.norm(positions - positions[0], axis=1).max()))
             support_forces.append(
                 float(np.percentile(self.foot_normal_force_n[start:end, support_foot][held], 10))
             )
         return {
             "simulated_seconds": round(float(self.times_s[-1]), 3),
+            "terminated_early": self.stop_reason is not None,
+            "stop_reason": self.stop_reason,
+            "support_contact_loss_frames": int((~support_contacts_all).sum()),
+            "minimum_single_support_force_n": (
+                round(float(single_support_forces.min()), 2)
+                if len(single_support_forces) else None
+            ),
+            "weak_single_support_frames": int(
+                (single_support_forces < MIN_SINGLE_SUPPORT_FORCE_N).sum()
+            ),
+            "maximum_support_xy_motion_all_frames_m": round(maximum_support_motion, 4),
             "completed_steps": len(self.landing_times_s),
+            "maximum_planned_step_duration_s": round(
+                max((plan.period_s for plan in self.plans), default=0.0), 3
+            ),
             "minimum_base_height_m": round(float(self.base_pos_w[:, 2].min()), 4),
             "maximum_xy_drift_m": round(float(drift.max()), 4),
             "wall_seconds": round(self.wall_seconds, 3),
@@ -95,6 +129,9 @@ class StepRun:
             "minimum_step_support_contact_fraction": (
                 round(min(support_contacts), 3) if support_contacts else None
             ),
+            "minimum_step_support_contact_fraction_all_phases": (
+                round(min(all_phase_support_contacts), 3) if all_phase_support_contacts else None
+            ),
             "maximum_step_support_xy_motion_m": (
                 round(max(support_motions), 4) if support_motions else None
             ),
@@ -107,8 +144,8 @@ class StepRun:
 
 
 def simulate_steps(
-    frequency_hz: float = 1.0,
-    seconds: float = 5.0,
+    frequency_hz: float = 0.5,
+    seconds: float = 4.2,
     num_candidates: int = 256,
     iterations: int = 16,
     num_threads: int = 0,
@@ -149,17 +186,37 @@ def simulate_steps(
     landings: list[float] = []
     plans: list[StepPlan] = []
     active_plan: StepPlan | None = None
+    stop_reason: str | None = None
+    completed_frames = 0
     start = time.perf_counter()
     for i in range(count):
         state = cadence.state()
         if active_plan is None or active_plan.swing_foot != state.swing_foot:
-            active_plan = mpc.plan(
-                plant.qpos[0].copy(),
-                plant.qvel[0].copy(),
-                plant.ctrl[0].copy(),
-                state,
-                time_s=float(plant.time[0]),
+            active_plan = None
+            error: RuntimeError | None = None
+            periods = sorted(
+                {min(2.0, state.target_period_s * value) for value in (1.0, 1.2, 1.5, 2.0, 3.0, 4.0)}
             )
+            for period_s in periods:
+                try:
+                    active_plan = mpc.plan(
+                        plant.qpos[0].copy(),
+                        plant.qvel[0].copy(),
+                        plant.ctrl[0].copy(),
+                        replace(state, target_period_s=period_s),
+                        time_s=float(plant.time[0]),
+                    )
+                    break
+                except RuntimeError as candidate_error:
+                    error = candidate_error
+            if active_plan is None:
+                assert error is not None
+                if i == 0:
+                    raise error
+                stop_reason = str(error)
+                break
+            cadence.frequency_hz = 1.0 / active_plan.period_s
+            state = cadence.state()
             plans.append(active_plan)
         command = mpc.target(active_plan, state.elapsed_s)
         trace = plant.rollout(command[None, None, :], max_target_rate_rad_s=4.0)
@@ -188,39 +245,59 @@ def simulate_steps(
         )
         swings[i] = state.swing_foot
         phases.append(state.phase)
+        completed_frames = i + 1
+        if not contacts[i, support]:
+            stop_reason = (
+                f"support foot {support} lost contact at {times[i]:.2f} s; "
+                f"other foot contact={bool(contacts[i, state.swing_foot])}, "
+                f"force={normal_force[i, state.swing_foot]:.1f} N"
+            )
+            break
+        if (
+            not contacts[i, state.swing_foot]
+            and normal_force[i, support] < MIN_SINGLE_SUPPORT_FORCE_N
+        ):
+            stop_reason = (
+                f"support foot {support} carried only {normal_force[i, support]:.1f} N "
+                f"during single support at {times[i]:.2f} s"
+            )
+            break
         next_state = cadence.advance(
-            plant.control_dt, (bool(contacts[i, 0]), bool(contacts[i, 1]))
+            plant.control_dt,
+            (bool(contacts[i, 0]), bool(contacts[i, 1])),
+            float(clearance[i, state.swing_foot]),
         )
         if next_state.swing_foot != state.swing_foot:
             landings.append(float(times[i]))
     return StepRun(
-        times,
-        qpos,
-        qvel,
-        ctrl,
-        base,
-        com,
-        feet,
-        contacts,
-        cop,
-        normal_force,
-        clearance,
-        foot_foot_distance,
-        foot_foot_contact,
-        com_margin,
-        cop_margin,
-        swings,
+        times[:completed_frames],
+        qpos[:completed_frames],
+        qvel[:completed_frames],
+        ctrl[:completed_frames],
+        base[:completed_frames],
+        com[:completed_frames],
+        feet[:completed_frames],
+        contacts[:completed_frames],
+        cop[:completed_frames],
+        normal_force[:completed_frames],
+        clearance[:completed_frames],
+        foot_foot_distance[:completed_frames],
+        foot_foot_contact[:completed_frames],
+        com_margin[:completed_frames],
+        cop_margin[:completed_frames],
+        swings[:completed_frames],
         tuple(phases),
         np.asarray(landings),
         tuple(plans),
         time.perf_counter() - start,
+        stop_reason,
     )
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--frequency", type=float, default=1.0, help="alternating landings per second")
-    parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--frequency", type=float, default=0.5, help="alternating landings per second")
+    parser.add_argument("--seconds", type=float, default=4.2)
     parser.add_argument("--candidates", type=int, default=256)
     parser.add_argument("--iterations", type=int, default=16)
     parser.add_argument("--threads", type=int, default=0)
@@ -239,6 +316,8 @@ def main() -> None:
         parser.error(str(error))
     result = {**run.summary(), "landing_times_s": run.landing_times_s.round(3).tolist()}
     print(json.dumps(result, indent=2))
+    if run.stop_reason is not None:
+        raise SystemExit(run.stop_reason)
     if result["minimum_base_height_m"] < 0.2:
         raise SystemExit("stepping simulation fell")
 

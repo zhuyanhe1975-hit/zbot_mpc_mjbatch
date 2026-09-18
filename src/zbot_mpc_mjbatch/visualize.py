@@ -5,14 +5,11 @@ from __future__ import annotations
 import argparse
 import json
 import math
-import os
 import shutil
 import subprocess
 from pathlib import Path
 
-os.environ.setdefault("MUJOCO_GL", "egl")
-
-import mujoco  # noqa: E402
+import mujoco
 
 from .model import load_model
 from .stepping import StepRun, simulate_steps
@@ -105,8 +102,8 @@ def render_video(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--frequency", type=float, default=1.0)
-    parser.add_argument("--seconds", type=float, default=5.0)
+    parser.add_argument("--frequency", type=float, default=0.5)
+    parser.add_argument("--seconds", type=float, default=4.2)
     parser.add_argument("--candidates", type=int, default=256)
     parser.add_argument("--iterations", type=int, default=16)
     parser.add_argument("--threads", type=int, default=0)
@@ -160,6 +157,8 @@ def main() -> None:
             indent=2,
         )
     )
+    if run.stop_reason is not None:
+        raise SystemExit(run.stop_reason)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ def load_model() -> mujoco.MjModel:
     model = mujoco.MjModel.from_xml_path(str(SCENE_XML))
     # The source model's position servos are unstable with MuJoCo's Euler default.
     model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    # Suppress the slow contact drift of MuJoCo's regularized friction model.
+    model.opt.noslip_iterations = 2
     if (model.nq, model.nv, model.nu) != (13, 12, 6):
         raise ValueError("expected the ZBot model with one free root and six hinges")
     return model

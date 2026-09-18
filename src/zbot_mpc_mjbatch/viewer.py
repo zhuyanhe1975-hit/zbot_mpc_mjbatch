@@ -42,7 +42,14 @@ def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
     viewer = mujoco.viewer.launch_passive(model, data, key_callback=on_key)
     # MuJoCo 3.11's passive handle requests shutdown without joining its
     # render thread. Joining before Python exits avoids a GLFW teardown crash.
-    viewer_threads = [thread for thread in threading.enumerate() if thread not in before]
+    # mjpython also registers dummy threads, which cannot be joined.
+    viewer_threads = [
+        thread
+        for thread in threading.enumerate()
+        if thread not in before
+        and thread is not threading.current_thread()
+        and not isinstance(thread, threading._DummyThread)
+    ]
     try:
         with viewer.lock():
             viewer.cam.lookat[:] = (0.0, 0.0, 0.25)

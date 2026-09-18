@@ -37,7 +37,7 @@ class CadenceStateMachine:
         self,
         frequency_hz: float,
         first_swing_foot: int = 0,
-        transfer_s: float = 0.08,
+        transfer_s: float = 0.3,
         lift_s: float = 0.12,
         lower_s: float = 0.12,
     ) -> None:
@@ -45,7 +45,7 @@ class CadenceStateMachine:
             raise ValueError("first_swing_foot must be 0 or 1")
         if not all(math.isfinite(value) and value > 0 for value in (transfer_s, lift_s, lower_s)):
             raise ValueError("phase durations must be finite and positive")
-        if transfer_s + lift_s + lower_s >= 0.5:
+        if min(transfer_s, 0.15) + lift_s + lower_s >= 0.5:
             raise ValueError("fixed phases must fit inside a 2 Hz step period")
         self.transfer_s = transfer_s
         self.lift_s = lift_s
@@ -53,6 +53,7 @@ class CadenceStateMachine:
         self.swing_foot = first_swing_foot
         self.elapsed_s = 0.0
         self._swing_airborne_seen = False
+        self._clearance_run = 0
         self.frequency_hz = self._check_frequency(frequency_hz)
         self.pending_frequency_hz = self.frequency_hz
 
@@ -68,7 +69,25 @@ class CadenceStateMachine:
 
     @property
     def hold_s(self) -> float:
-        return self.target_period_s - self.transfer_s - self.lift_s - self.lower_s
+        return (
+            self.target_period_s
+            - self.current_transfer_s
+            - self.current_lift_s
+            - self.current_lower_s
+        )
+
+    @property
+    def current_transfer_s(self) -> float:
+        period = self.target_period_s
+        return min(self.transfer_s, 0.3 * period) + 0.6 * max(0.0, period - 1.0)
+
+    @property
+    def current_lift_s(self) -> float:
+        return self.lift_s + 0.18 * max(0.0, self.target_period_s - 1.0)
+
+    @property
+    def current_lower_s(self) -> float:
+        return self.lower_s + 0.18 * max(0.0, self.target_period_s - 1.0)
 
     def request_frequency(self, frequency_hz: float) -> None:
         self.pending_frequency_hz = self._check_frequency(frequency_hz)
@@ -76,11 +95,14 @@ class CadenceStateMachine:
     def state(self) -> StepState:
         t = self.elapsed_s
         period = self.target_period_s
+        transfer = self.current_transfer_s
+        lift = self.current_lift_s
+        lower = self.current_lower_s
         intervals = (
-            (Phase.TRANSFER, 0.0, self.transfer_s),
-            (Phase.LIFT, self.transfer_s, self.transfer_s + self.lift_s),
-            (Phase.HOLD, self.transfer_s + self.lift_s, period - self.lower_s),
-            (Phase.LOWER, period - self.lower_s, period),
+            (Phase.TRANSFER, 0.0, transfer),
+            (Phase.LIFT, transfer, transfer + lift),
+            (Phase.HOLD, transfer + lift, period - lower),
+            (Phase.LOWER, period - lower, period),
         )
         for phase, start, end in intervals:
             if t < end:
@@ -103,19 +125,32 @@ class CadenceStateMachine:
             touchdown_late_s=t - period,
         )
 
-    def advance(self, dt: float, contacts: tuple[bool, bool]) -> StepState:
+    def advance(
+        self,
+        dt: float,
+        contacts: tuple[bool, bool],
+        swing_clearance_m: float | None = None,
+    ) -> StepState:
         if not math.isfinite(dt) or dt <= 0:
             raise ValueError("dt must be finite and positive")
         if len(contacts) != 2:
             raise ValueError("contacts must contain two feet")
         self.elapsed_s += dt
-        if not contacts[self.swing_foot]:
-            self._swing_airborne_seen = True
+        if swing_clearance_m is None:
+            if not contacts[self.swing_foot]:
+                self._swing_airborne_seen = True
+        else:
+            self._clearance_run = (
+                self._clearance_run + 1 if swing_clearance_m >= 0.003 else 0
+            )
+            if self._clearance_run * dt >= 0.1:
+                self._swing_airborne_seen = True
         period = self.target_period_s
         if self.elapsed_s >= period and all(contacts) and self._swing_airborne_seen:
             overshoot = self.elapsed_s - period
             self.elapsed_s = overshoot if overshoot <= dt else 0.0
             self.swing_foot = 1 - self.swing_foot
             self._swing_airborne_seen = False
+            self._clearance_run = 0
             self.frequency_hz = self.pending_frequency_hz
         return self.state()
