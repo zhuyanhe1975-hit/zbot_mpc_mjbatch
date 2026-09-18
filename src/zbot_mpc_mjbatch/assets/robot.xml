@@ -1,0 +1,92 @@
+<mujoco model="zbot_6dof">
+  <compiler angle="radian" meshdir="meshes" inertiafromgeom="false" fusestatic="false" />
+  <option timestep="0.005" />
+  <asset>
+    <mesh name="mesh_2fa6986b40efe990" file="mesh_2fa6986b40efe990.obj" />
+    <mesh name="mesh_cdb66879ba3b5662" file="mesh_cdb66879ba3b5662.obj" />
+    <mesh name="mesh_b2f807ccdba07ce2" file="mesh_b2f807ccdba07ce2.obj" />
+    <mesh name="mesh_8c7e589cf98741ba" file="mesh_8c7e589cf98741ba.obj" />
+  </asset>
+  <worldbody>
+    <body name="foot_0" pos="0 0 0" quat="1 0 0 0">
+      <freejoint name="root" />
+      <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+      <geom name="foot_0_visuals" type="mesh" mesh="mesh_2fa6986b40efe990" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+      <geom name="foot_0_collisions" type="mesh" mesh="mesh_2fa6986b40efe990" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+      <body name="b1" pos="0 0 0.0529999993742" quat="1 0 0 0">
+        <joint name="joint1" type="hinge" pos="0 0 0" axis="0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+        <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+        <geom name="b1_visuals" type="mesh" mesh="mesh_cdb66879ba3b5662" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+        <geom name="b1_collisions" type="mesh" mesh="mesh_cdb66879ba3b5662" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+        <body name="a2" pos="0 0 0.0530000006258" quat="1 0 0 0">
+          <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+          <geom name="a2_visuals" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+          <geom name="a2_collisions" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+          <body name="b2" pos="0 0 0.053" quat="1 0 0 0">
+            <joint name="joint2" type="hinge" pos="-4.13590306277e-25 -2.02863317969e-32 -5.60283641704e-09" axis="-0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+            <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+            <geom name="b2_visuals" type="mesh" mesh="mesh_8c7e589cf98741ba" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+            <geom name="b2_collisions" type="mesh" mesh="mesh_8c7e589cf98741ba" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+            <body name="a3" pos="0 0 0.053" quat="1 0 0 0">
+              <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+              <geom name="a3_visuals" type="mesh" mesh="mesh_2fa6986b40efe990" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+              <geom name="a3_collisions" type="mesh" mesh="mesh_2fa6986b40efe990" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+              <body name="b3" pos="0 0 0.053" quat="1 0 0 0">
+                <joint name="joint3" type="hinge" pos="9.6288164345e-17 0 -1.43051144263e-08" axis="0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+                <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+                <geom name="b3_visuals" type="mesh" mesh="mesh_cdb66879ba3b5662" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+                <geom name="b3_collisions" type="mesh" mesh="mesh_cdb66879ba3b5662" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                <body name="base" pos="0 0 0.053" quat="1 0 0 0">
+                  <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+                  <geom name="base_visuals" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+                  <geom name="base_collisions" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                  <body name="b4" pos="0 0 0.053" quat="1 0 0 0">
+                    <joint name="joint4" type="hinge" pos="0 0 0" axis="-0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+                    <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+                    <geom name="b4_visuals" type="mesh" mesh="mesh_8c7e589cf98741ba" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+                    <geom name="b4_collisions" type="mesh" mesh="mesh_8c7e589cf98741ba" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                    <body name="a5" pos="0 0 0.053" quat="1 0 0 0">
+                      <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+                      <geom name="a5_visuals" type="mesh" mesh="mesh_2fa6986b40efe990" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+                      <geom name="a5_collisions" type="mesh" mesh="mesh_2fa6986b40efe990" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                      <body name="b5" pos="0 0 0.053" quat="1 0 0 0">
+                        <joint name="joint5" type="hinge" pos="0 0 0" axis="0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+                        <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+                        <geom name="b5_visuals" type="mesh" mesh="mesh_cdb66879ba3b5662" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
+                        <geom name="b5_collisions" type="mesh" mesh="mesh_cdb66879ba3b5662" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                        <body name="a6" pos="0 0 0.053" quat="1 0 0 0">
+                          <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
+                          <geom name="a6_visuals" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+                          <geom name="a6_collisions" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                          <body name="foot_1" pos="0 0 0.053" quat="1 0 0 0">
+                            <joint name="joint6" type="hinge" pos="-3.0345730373e-09 -5.05357953039e-25 3.0345730373e-09" axis="-0.707106885797 0 0.707106676576" damping="0" frictionloss="0" armature="0" limited="false" />
+                            <inertial mass="0.2504200041294098" pos="-0.011593000032 -5.10630009387e-08 0.0232740007341" diaginertia="0.000220403075218 0.000199720001547 0.000292356911814" quat="0.99977940321 -4.83282995845e-08 -0.0210046786815 2.30018758884e-06" />
+                            <geom name="foot_1_visuals" type="mesh" mesh="mesh_8c7e589cf98741ba" group="2" contype="0" conaffinity="0" density="0" rgba="0.65 0.68 0.72 1" />
+                            <geom name="foot_1_collisions" type="mesh" mesh="mesh_8c7e589cf98741ba" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <contact>
+    <exclude body1="b1" body2="a2" />
+    <exclude body1="a2" body2="b2" />
+    <exclude body1="b2" body2="a3" />
+    <exclude body1="a3" body2="b3" />
+    <exclude body1="b3" body2="base" />
+    <exclude body1="b4" body2="a5" />
+    <exclude body1="a5" body2="b5" />
+    <exclude body1="b5" body2="a6" />
+    <exclude body1="a6" body2="foot_1" />
+    <exclude body1="foot_0" body2="b1" />
+    <exclude body1="base" body2="b4" />
+  </contact>
+</mujoco>

@@ -1,0 +1,42 @@
+<mujoco model="zbot_walk_flat">
+  <include file="robot.xml"/>
+
+  <visual>
+    <headlight ambient="0.12 0.14 0.17" diffuse="0.48 0.52 0.60" specular="0.35 0.35 0.35"/>
+    <quality shadowsize="2048"/>
+    <map fogstart="6" fogend="15"/>
+    <rgba haze="0.65 0.70 0.78 1"/>
+  </visual>
+
+  <asset>
+    <texture name="studio_sky" type="skybox" builtin="gradient" rgb1="0.17 0.24 0.36" rgb2="0.68 0.74 0.83" width="512" height="512"/>
+    <texture name="ground_grid" type="2d" builtin="checker" mark="edge" markrgb="0.44 0.51 0.60" rgb1="0.78 0.82 0.87" rgb2="0.68 0.74 0.80" width="512" height="512"/>
+    <material name="ground_studio" texture="ground_grid" texuniform="true" texrepeat="4 4" reflectance="0.12" specular="0.25" shininess="0.2"/>
+  </asset>
+
+  <worldbody>
+    <light name="key" pos="2 -1.5 3" dir="-0.6 0.5 -1" directional="true" diffuse="1 0.95 0.88" specular="0.7 0.7 0.7" castshadow="true"/>
+    <light name="fill" pos="-1 2 2" dir="0.4 -0.7 -1" directional="true" diffuse="0.35 0.42 0.55" castshadow="false"/>
+    <geom name="floor" type="plane" size="5 5 0.1" material="ground_studio" friction="1 0.005 0.0001"/>
+  </worldbody>
+
+  <actuator>
+    <position name="joint1" joint="joint1" kp="50" kv="5" forcerange="-2000 2000"/>
+    <position name="joint2" joint="joint2" kp="50" kv="5" forcerange="-2000 2000"/>
+    <position name="joint3" joint="joint3" kp="50" kv="5" forcerange="-2000 2000"/>
+    <position name="joint4" joint="joint4" kp="50" kv="5" forcerange="-2000 2000"/>
+    <position name="joint5" joint="joint5" kp="50" kv="5" forcerange="-2000 2000"/>
+    <position name="joint6" joint="joint6" kp="50" kv="5" forcerange="-2000 2000"/>
+  </actuator>
+
+  <sensor>
+    <contact name="foot_0_contact" geom1="floor" geom2="foot_0_collisions" data="found" num="1" reduce="mindist"/>
+    <contact name="foot_1_contact" geom1="floor" geom2="foot_1_collisions" data="found" num="1" reduce="mindist"/>
+    <contact name="foot_0_force" geom1="floor" geom2="foot_0_collisions" data="force" num="1" reduce="mindist"/>
+    <contact name="foot_1_force" geom1="floor" geom2="foot_1_collisions" data="force" num="1" reduce="mindist"/>
+  </sensor>
+
+  <keyframe>
+    <key name="stand" qpos="0 -0.06 0 1 0 0 0 0.312 0.837 -2.02 2.02 -0.837 -0.312"/>
+  </keyframe>
+</mujoco>

@@ -1,0 +1,7 @@
+{
+  "include": ["src"],
+  "venvPath": ".",
+  "venv": ".venv",
+  "stubPath": "../../AI/mjbatch/typings",
+  "typeCheckingMode": "standard"
+}
