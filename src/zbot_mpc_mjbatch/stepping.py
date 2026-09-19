@@ -13,6 +13,7 @@ from .cadence import CadenceStateMachine, Phase
 from .model import load_model
 from .mpc import MIN_SINGLE_SUPPORT_FORCE_N, StepMPC, StepPlan
 from .rollout import BatchRollout
+from .warmstart import LinearWarmStartPolicy, WarmStartPolicy
 
 
 @dataclass(frozen=True)
@@ -126,6 +127,7 @@ class StepRun:
             "minimum_step_3mm_clearance_run_s": (
                 round(min(clear_runs), 3) if clear_runs else None
             ),
+            "minimum_step_hold_s": round(min(clear_runs), 3) if clear_runs else None,
             "minimum_step_support_contact_fraction": (
                 round(min(support_contacts), 3) if support_contacts else None
             ),
@@ -150,20 +152,29 @@ def simulate_steps(
     iterations: int = 16,
     num_threads: int = 0,
     seed: int = 4,
+    warm_start_policy: WarmStartPolicy | None = None,
+    max_steps: int | None = None,
+    minimum_hold_s: float = 0.1,
 ) -> StepRun:
     """Optimize each step from the latest measured state and simulate its execution."""
     if not np.isfinite(seconds) or seconds <= 0:
         raise ValueError("seconds must be finite and positive")
+    if max_steps is not None and max_steps < 1:
+        raise ValueError("max_steps must be positive when provided")
     model = load_model()
     plant = BatchRollout(model, 1)
     plant.reset_to_stand()
-    cadence = CadenceStateMachine(frequency_hz, first_swing_foot=1)
+    cadence = CadenceStateMachine(
+        frequency_hz, first_swing_foot=1, minimum_clearance_s=minimum_hold_s
+    )
     mpc = StepMPC(
         model,
         num_candidates=num_candidates,
         iterations=iterations,
         num_threads=num_threads,
         seed=seed,
+        warm_start_policy=warm_start_policy,
+        minimum_clearance_s=minimum_hold_s,
     )
     count = int(np.ceil(seconds / plant.control_dt))
     times = np.arange(1, count + 1) * plant.control_dt
@@ -186,16 +197,23 @@ def simulate_steps(
     landings: list[float] = []
     plans: list[StepPlan] = []
     active_plan: StepPlan | None = None
+    settle_frames = 0
     stop_reason: str | None = None
     completed_frames = 0
     start = time.perf_counter()
     for i in range(count):
         state = cadence.state()
-        if active_plan is None or active_plan.swing_foot != state.swing_foot:
+        settling = settle_frames > 0
+        if not settling and (active_plan is None or active_plan.swing_foot != state.swing_foot):
             active_plan = None
             error: RuntimeError | None = None
+            hold_extension_s = minimum_hold_s if minimum_hold_s >= 1.0 else 0.0
+            maximum_period_s = max(2.0 + hold_extension_s, state.target_period_s)
             periods = sorted(
-                {min(2.0, state.target_period_s * value) for value in (1.0, 1.2, 1.5, 2.0, 3.0, 4.0)}
+                {
+                    min(maximum_period_s, state.target_period_s * value)
+                    for value in (1.0, 1.2, 1.5, 2.0, 3.0, 4.0)
+                }
             )
             for period_s in periods:
                 try:
@@ -218,7 +236,7 @@ def simulate_steps(
             cadence.frequency_hz = 1.0 / active_plan.period_s
             state = cadence.state()
             plans.append(active_plan)
-        command = mpc.target(active_plan, state.elapsed_s)
+        command = mpc.stand if settling else mpc.target(active_plan, state.elapsed_s)
         trace = plant.rollout(command[None, None, :], max_target_rate_rad_s=4.0)
         qpos[i] = plant.qpos[0]
         qvel[i] = plant.qvel[0]
@@ -246,14 +264,23 @@ def simulate_steps(
         swings[i] = state.swing_foot
         phases.append(state.phase)
         completed_frames = i + 1
-        if not contacts[i, support]:
+        if settling and (
+            not contacts[i].any()
+            or normal_force[i, contacts[i]].sum() < MIN_SINGLE_SUPPORT_FORCE_N
+        ):
+            stop_reason = (
+                f"settling lost loaded ground support at {times[i]:.2f} s; "
+                f"contacts={contacts[i].tolist()}, forces={normal_force[i].round(1).tolist()}"
+            )
+            break
+        if not settling and not contacts[i, support]:
             stop_reason = (
                 f"support foot {support} lost contact at {times[i]:.2f} s; "
                 f"other foot contact={bool(contacts[i, state.swing_foot])}, "
                 f"force={normal_force[i, state.swing_foot]:.1f} N"
             )
             break
-        if (
+        if not settling and (
             not contacts[i, state.swing_foot]
             and normal_force[i, support] < MIN_SINGLE_SUPPORT_FORCE_N
         ):
@@ -262,6 +289,11 @@ def simulate_steps(
                 f"during single support at {times[i]:.2f} s"
             )
             break
+        if settling:
+            settle_frames -= 1
+            if settle_frames == 0:
+                active_plan = None
+            continue
         next_state = cadence.advance(
             plant.control_dt,
             (bool(contacts[i, 0]), bool(contacts[i, 1])),
@@ -269,6 +301,10 @@ def simulate_steps(
         )
         if next_state.swing_foot != state.swing_foot:
             landings.append(float(times[i]))
+            if max_steps is not None and len(landings) >= max_steps:
+                break
+            if minimum_hold_s >= 1.0:
+                settle_frames = int(np.ceil(1.0 / plant.control_dt))
     return StepRun(
         times[:completed_frames],
         qpos[:completed_frames],
@@ -302,8 +338,21 @@ def main() -> None:
     parser.add_argument("--iterations", type=int, default=16)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--seed", type=int, default=4)
+    parser.add_argument("--steps", type=int, help="stop successfully after this many landings")
+    parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        default=0.1,
+        help="required continuous swing-foot clearance per step",
+    )
+    parser.add_argument(
+        "--warm-start",
+        type=str,
+        help="NPZ policy whose proposal seeds MPC; all safety checks remain active",
+    )
     args = parser.parse_args()
     try:
+        policy = LinearWarmStartPolicy.load(args.warm_start) if args.warm_start else None
         run = simulate_steps(
             args.frequency,
             args.seconds,
@@ -311,6 +360,9 @@ def main() -> None:
             args.iterations,
             args.threads,
             args.seed,
+            policy,
+            args.steps,
+            args.hold_seconds,
         )
     except ValueError as error:
         parser.error(str(error))

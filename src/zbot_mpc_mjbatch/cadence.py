@@ -15,6 +15,18 @@ class Phase(str, Enum):
     WAIT_CONTACT = "wait_contact"
 
 
+def phase_durations(
+    period_s: float,
+    transfer_s: float = 0.3,
+    lift_s: float = 0.12,
+    lower_s: float = 0.12,
+) -> tuple[float, float, float]:
+    """Stretch transitions up to the proven 2 s gait, then add hold time."""
+    stretch = min(max(0.0, period_s - 1.0), 1.0)
+    transfer = min(transfer_s, 0.3 * period_s) + 0.6 * stretch
+    return transfer, lift_s + 0.18 * stretch, lower_s + 0.18 * stretch
+
+
 @dataclass(frozen=True)
 class StepState:
     phase: Phase
@@ -40,16 +52,21 @@ class CadenceStateMachine:
         transfer_s: float = 0.3,
         lift_s: float = 0.12,
         lower_s: float = 0.12,
+        minimum_clearance_s: float = 0.1,
     ) -> None:
         if first_swing_foot not in (0, 1):
             raise ValueError("first_swing_foot must be 0 or 1")
-        if not all(math.isfinite(value) and value > 0 for value in (transfer_s, lift_s, lower_s)):
+        if not all(
+            math.isfinite(value) and value > 0
+            for value in (transfer_s, lift_s, lower_s, minimum_clearance_s)
+        ):
             raise ValueError("phase durations must be finite and positive")
         if min(transfer_s, 0.15) + lift_s + lower_s >= 0.5:
             raise ValueError("fixed phases must fit inside a 2 Hz step period")
         self.transfer_s = transfer_s
         self.lift_s = lift_s
         self.lower_s = lower_s
+        self.minimum_clearance_s = minimum_clearance_s
         self.swing_foot = first_swing_foot
         self.elapsed_s = 0.0
         self._swing_airborne_seen = False
@@ -59,8 +76,8 @@ class CadenceStateMachine:
 
     @staticmethod
     def _check_frequency(value: float) -> float:
-        if not math.isfinite(value) or not 0.5 <= value <= 2.0:
-            raise ValueError("frequency must be between 0.5 and 2.0 Hz")
+        if not math.isfinite(value) or not 1.0 / 3.0 <= value <= 2.0:
+            raise ValueError("frequency must be between 1/3 and 2.0 Hz")
         return float(value)
 
     @property
@@ -78,16 +95,21 @@ class CadenceStateMachine:
 
     @property
     def current_transfer_s(self) -> float:
-        period = self.target_period_s
-        return min(self.transfer_s, 0.3 * period) + 0.6 * max(0.0, period - 1.0)
+        return phase_durations(
+            self.target_period_s, self.transfer_s, self.lift_s, self.lower_s
+        )[0]
 
     @property
     def current_lift_s(self) -> float:
-        return self.lift_s + 0.18 * max(0.0, self.target_period_s - 1.0)
+        return phase_durations(
+            self.target_period_s, self.transfer_s, self.lift_s, self.lower_s
+        )[1]
 
     @property
     def current_lower_s(self) -> float:
-        return self.lower_s + 0.18 * max(0.0, self.target_period_s - 1.0)
+        return phase_durations(
+            self.target_period_s, self.transfer_s, self.lift_s, self.lower_s
+        )[2]
 
     def request_frequency(self, frequency_hz: float) -> None:
         self.pending_frequency_hz = self._check_frequency(frequency_hz)
@@ -143,7 +165,7 @@ class CadenceStateMachine:
             self._clearance_run = (
                 self._clearance_run + 1 if swing_clearance_m >= 0.003 else 0
             )
-            if self._clearance_run * dt >= 0.1:
+            if self._clearance_run * dt >= self.minimum_clearance_s:
                 self._swing_airborne_seen = True
         period = self.target_period_s
         if self.elapsed_s >= period and all(contacts) and self._swing_airborne_seen:

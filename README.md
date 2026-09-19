@@ -5,13 +5,15 @@
 ## 已实现
 
 - 使用 `mjbatch` 对 13 维位置、12 维速度、6 个位置执行器的 ZBot 做并行 MuJoCo rollout；可读取身体与双脚位置、接触传感器，并限制关节位置目标的变化速度。
-- 使用 `implicitfast` 积分器稳定运行原始站立位姿，并启用两次 MuJoCo NoSlip 后处理迭代以抑制软接触模型的缓慢滑动。
+- 使用 `implicitfast` 积分器稳定运行原始站立位姿，并启用两次 MuJoCo NoSlip 后处理迭代以抑制软接触模型的缓慢滑动；六个关节采用与已验证 ZBot MuJoCo 模型一致的阻尼、摩擦和转子惯量，避免落地后持续振荡。
 - 接触守卫的变频状态机：目标落地间隔为 `T = 1/f`。默认 0.5 Hz 的慢速模式每步先用约 0.9 秒转移重心，再用约 0.3 秒抬脚、0.5 秒保持、0.3 秒落脚。只有摆动脚连续至少 0.1 秒高于地面 3 mm、且最终双脚接触，才算有效换脚。若较快目标节拍没有安全候选，规划器可把当前一步延长，最长 2 秒。
 - 参考经典 [Kajita 等人的 ZMP 预览控制](https://people.csail.mit.edu/katiebyl/kb/DW2008/papers_of_tangential_interest/kajita03.pdf)，先根据未来两步的支撑脚位置规划双脚支撑与单脚支撑的 ZMP 目标，再用线性倒立摆的发散分量倒推有界的质心参考。每次落地后，`mjbatch` 采样 MPC 从测量状态出发，优化独立的重心转移和抬脚关节脉冲，并跟踪质心与 CoP/ZMP 参考。预测覆盖一步和 0.5 秒站立恢复。
 - MPC 在预测的 20 ms 控制节点上筛除支撑脚失去接触、摆动脚离地时支撑力低于 15 N、摆动脚没有持续抬起、或双脚间隙不足 2 mm 的候选。执行时再次检查支撑力。找不到候选时安全停止并输出 `terminated_early` 和 `stop_reason`，不会继续执行已知不安全的轨迹。
 - 两脚碰撞网格的带符号距离用于防撞。MPC 淘汰预测控制节点中两脚距离不足 2 mm 或已接触的候选；实际仿真检测到两脚接触会立即停止。MuJoCo 网格距离偶尔返回零但最近点仍分离，代码用最近点线段修正这种情况，并始终以接触传感器复核。其他关节之间的自碰撞不在本次约束范围内。
 - 全身重心来自 MuJoCo 的 `subtree_com`，足底支撑边界由站立时接近地面的碰撞网格顶点构造，并随足部姿态变换。每只脚的 CoP（平地单脚支撑时的 ZMP）由全部地面接触的合成位置、三维力和力矩计算。MPC 在实际单脚支撑的预测片段中加入重心投影与 CoP 越出足底的**软惩罚**，并输出最小支撑裕度；负值表示越界。
 - `./run.sh` 默认运行 0.5 Hz、4.2 秒的慢速闭环踏步，并输出有效换脚次数、落地时刻、单脚支撑最小法向力、机身最低高度及最大水平漂移。站立基线仍可用 `uv run zbot-mpc-smoke` 单独验证。
+- 支持 learned warm-start：策略根据步边界状态提出 18 维搜索中心，MPC 仍保留启发式种子和历史解，并对所有候选执行原有接触、支撑力、抬脚持续时间和脚间碰撞硬筛选。策略不能直接绕过安全约束。
+- 长保持模式把 HOLD 分成五个控制结点，并在左右换脚之间执行 1 秒双脚支撑恢复。`--frequency 0.4 --hold-seconds 1.0` 会硬性要求每只脚连续高于地面 3 mm 至少 1 秒；左右脚使用独立的安全 warm-start。
 
 当前控制器仍是**步级采样 MPC**，ZMP 预览是简化的线性倒立摆参考，关节执行由完整 MuJoCo 模型检验。硬筛选只检查离散预测节点，不能保证节点之间始终接触，也不能保证支撑脚完全静止；其位移仍是优化代价。质心和 CoP 的足底边界也是软代价。若规划找不到满足接触条件的下一步，会提前安全停止。当前六关节位置伺服模型缺少保证连续多步踏步所需的全身接触力控制；这是仿真原型，不应作为真实硬件控制器。
 
@@ -27,6 +29,31 @@ uv run zbot-mpc-smoke
 uv run pytest -q
 ```
 
+左右脚依次抬起并保持至少 1 秒：
+
+```bash
+./visualize.sh --viewer --frequency 0.4 --hold-seconds 1.0 \
+  --steps 2 --seconds 9 --candidates 64 --iterations 4 --threads 8
+```
+
+## MPC teacher 与 learned warm-start
+
+第一阶段先用现有 MPC 产生安全专家计划，再拟合一个无额外运行时依赖的轻量策略：
+
+```bash
+uv run zbot-mpc-train-warmstart \
+  --episodes 8 --steps 2 --seconds 6.0 --threads 8 \
+  --output dist/zbot_warmstart.npz \
+  --dataset dist/zbot_mpc_expert.npz
+
+./run.sh --warm-start dist/zbot_warmstart.npz \
+  --candidates 128 --iterations 8 --frequency 0.5 --steps 2 --seconds 6.0 --threads 8
+```
+
+观测去除了自由根的世界坐标 `x/y`，包含姿态、速度、关节位置目标、步态相位、接触、归一化法向力和相对支撑脚的质心位置。策略为两只摆动脚使用独立线性头并共享观测归一化，避免左右脚数据不平衡被单个线性映射平均。策略只决定采样分布的初始均值；输出会限制在 MPC 原有参数范围内，预测 rollout 的硬安全筛选仍是最终裁决者。
+
+当前训练命令属于 MPC teacher bootstrap：第一轮做岭回归行为克隆，后续轮次让已学策略驱动 MPC，再聚合这些新状态上的 MPC 标签（DAgger）。目的是先验证 learned warm-start 能否在较少候选和迭代下保持安全成功率。下一阶段才在同一策略接口上加入受限 residual PPO；在 warm-start 基线稳定前，不允许 RL 直接修改执行器目标。
+
 上面的 1 Hz 命令用于较快节拍的实验；无安全候选时会提前停止。优先检查默认慢速回放的支撑效果。
 
 ## 规划效率与质心雅可比
@@ -39,7 +66,7 @@ uv run pytest -q
 
 加 `--viewer` 可在 MuJoCo 交互窗口中循环回放同一条轨迹，保留实际关节位置、速度和控制量。空格暂停或继续、`N` 单帧前进、`R` 从头播放，关闭窗口退出；`--once` 播放一遍后自动关闭。Viewer 需要图形桌面；在 macOS 上脚本会自动使用 `mjpython` 启动。MP4 模式仍可用于无桌面环境。
 
-`--frequency` 的有效范围是 0.5–2 Hz，表示目标节拍；`maximum_planned_step_duration_s` 显示安全筛选要求的最长实际规划周期。`--candidates` 和 `--iterations` 控制优化工作量。若提前停止，`run.sh` 会输出已完成段的指标并以非零状态退出。站立 smoke 可传入 `--num-sims 64 --seconds 2 --threads 8`。
+`--frequency` 的有效范围是 1/3–2 Hz，表示目标节拍；`--hold-seconds` 是摆动脚连续高于地面 3 mm 的硬性时长要求。`maximum_planned_step_duration_s` 显示安全筛选要求的最长实际规划周期。`--candidates` 和 `--iterations` 控制优化工作量。若提前停止，`run.sh` 会输出已完成段的指标并以非零状态退出。站立 smoke 可传入 `--num-sims 64 --seconds 2 --threads 8`。
 
 `run.sh` 的 `minimum_single_support_com_margin_m` 与 `minimum_single_support_cop_margin_m` 仅统计摆动脚离地且支撑脚接触的时刻；如果没有这样的时刻，显示 `null`。CoP 的法向力不足 1 N 时不定义，也不计入裕度。
 

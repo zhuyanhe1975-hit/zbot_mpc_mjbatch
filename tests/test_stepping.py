@@ -7,7 +7,7 @@ from zbot_mpc_mjbatch.stepping import simulate_steps
 
 
 def test_mpc_completes_alternating_steps_without_falling_or_walking_away():
-    run = simulate_steps(frequency_hz=0.5, seconds=4.2, num_threads=8)
+    run = simulate_steps(frequency_hz=0.5, seconds=4.2, num_threads=8, max_steps=2)
 
     assert len(run.landing_times_s) == 2
     np.testing.assert_allclose(run.landing_times_s, [2.0, 4.0], atol=0.06)
@@ -92,3 +92,37 @@ def test_cadence_endpoints_preserve_support_or_stop_safely(
     else:
         assert "no MPC candidate" in run.stop_reason
         assert run.times_s[-1] < seconds
+
+
+def test_both_feet_hold_for_one_second_with_loaded_support():
+    run = simulate_steps(
+        frequency_hz=0.4,
+        seconds=9.0,
+        num_candidates=64,
+        iterations=4,
+        num_threads=8,
+        max_steps=2,
+        minimum_hold_s=1.0,
+    )
+
+    assert run.stop_reason is None
+    assert len(run.landing_times_s) == 2
+    assert run.foot_contacts[-1].all()
+    boundaries = np.searchsorted(run.times_s, run.landing_times_s, side="right")
+    start = 0
+    lifted_feet = []
+    for end in boundaries:
+        swing = int(run.swing_feet[start])
+        lifted_feet.append(swing)
+        clearance = run.foot_clearance_m[start:end, swing] >= 0.003
+        longest = current = 0
+        for above in clearance:
+            current = current + 1 if above else 0
+            longest = max(longest, current)
+        assert longest * 0.02 >= 1.0
+        single_support = ~run.foot_contacts[start:end, swing]
+        support = 1 - swing
+        assert run.foot_contacts[start:end, support][single_support].all()
+        assert run.foot_normal_force_n[start:end, support][single_support].min() >= 15.0
+        start = end
+    assert lifted_feet == [1, 0]

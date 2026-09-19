@@ -15,6 +15,10 @@ def load_model() -> mujoco.MjModel:
     model.opt.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
     # Suppress the slow contact drift of MuJoCo's regularized friction model.
     model.opt.noslip_iterations = 2
+    # Keep the light serial mechanism from oscillating after touchdown.
+    model.dof_damping[6:] = 0.08
+    model.dof_frictionloss[6:] = 0.02
+    model.dof_armature[6:] = 0.003
     if (model.nq, model.nv, model.nu) != (13, 12, 6):
         raise ValueError("expected the ZBot model with one free root and six hinges")
     return model

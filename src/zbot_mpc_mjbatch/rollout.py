@@ -19,6 +19,7 @@ class RolloutTrace:
     foot_pos_w: np.ndarray  # (horizon, candidates, foot, xyz)
     foot_contacts: np.ndarray  # (horizon, candidates, foot)
     joint_pos: np.ndarray  # (horizon, candidates, six joints)
+    qvel: np.ndarray  # (horizon, candidates, generalized velocities)
     applied_targets: np.ndarray  # (horizon, candidates, six actuators)
     com_pos_w: np.ndarray  # (horizon, candidates, xyz)
     foot_geom_pos_w: np.ndarray  # (horizon, candidates, foot, xyz)
@@ -125,6 +126,7 @@ class BatchRollout:
         feet = np.empty((horizon, self.num_candidates, 2, 3))
         contacts = np.empty((horizon, self.num_candidates, 2), dtype=np.bool_)
         joints = np.empty((horizon, self.num_candidates, self.model.nu))
+        qvel = np.empty((horizon, self.num_candidates, self.model.nv))
         applied = np.empty((horizon, self.num_candidates, self.model.nu))
         com = np.empty((horizon, self.num_candidates, 3))
         geom_pos = np.empty((horizon, self.num_candidates, 2, 3))
@@ -164,9 +166,10 @@ class BatchRollout:
             )
             foot_foot_contact[h] = self.foot_foot_contact[:, 0] > 0
             joints[h] = self.qpos[:, 7:]
+            qvel[h] = self.qvel
             applied[h] = control
             previous = control
         return RolloutTrace(
-            base, base_quat, feet, contacts, joints, applied, com, geom_pos, geom_mat,
+            base, base_quat, feet, contacts, joints, qvel, applied, com, geom_pos, geom_mat,
             cop, normal_force, clearance, foot_foot_distance, foot_foot_contact,
         )

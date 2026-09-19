@@ -18,6 +18,7 @@ def test_copied_zbot_model_stands_in_batched_mujoco():
     assert trace.foot_pos_w.shape == (50, 4, 2, 3)
     assert trace.foot_contacts.shape == (50, 4, 2)
     assert trace.com_pos_w.shape == (50, 4, 3)
+    assert trace.qvel.shape == (50, 4, model.nv)
     assert trace.foot_cop_w.shape == (50, 4, 2, 2)
     assert trace.foot_clearance_m.shape == (50, 4, 2)
     assert trace.foot_foot_distance_m.shape == (50, 4)
