@@ -6,12 +6,22 @@ import math
 from dataclasses import dataclass
 from enum import Enum
 
+LANDING_SETTLE_S = 0.08
+MIN_SWING_CLEARANCE_M = 0.005
+MIN_SWING_CLEARANCE_S = 0.1
+
+
+def landing_settle_s(period_s: float) -> float:
+    """Allow slow steps to settle on both feet before reversing support."""
+    return min(0.3, 0.16 * period_s)
+
 
 class Phase(str, Enum):
     TRANSFER = "transfer"
     LIFT = "lift"
     HOLD = "hold"
     LOWER = "lower"
+    SETTLE = "settle"
     WAIT_CONTACT = "wait_contact"
 
 
@@ -40,16 +50,20 @@ class CadenceStateMachine:
         transfer_s: float = 0.3,
         lift_s: float = 0.12,
         lower_s: float = 0.12,
+        handoff_hold_s: float = 0.0,
     ) -> None:
         if first_swing_foot not in (0, 1):
             raise ValueError("first_swing_foot must be 0 or 1")
         if not all(math.isfinite(value) and value > 0 for value in (transfer_s, lift_s, lower_s)):
             raise ValueError("phase durations must be finite and positive")
-        if min(transfer_s, 0.15) + lift_s + lower_s >= 0.5:
+        if min(transfer_s, 0.15) + lift_s + lower_s + LANDING_SETTLE_S >= 0.5:
             raise ValueError("fixed phases must fit inside a 2 Hz step period")
         self.transfer_s = transfer_s
         self.lift_s = lift_s
         self.lower_s = lower_s
+        if not math.isfinite(handoff_hold_s) or handoff_hold_s < 0:
+            raise ValueError("handoff hold must be finite and nonnegative")
+        self.handoff_hold_s = handoff_hold_s
         self.swing_foot = first_swing_foot
         self.elapsed_s = 0.0
         self._swing_airborne_seen = False
@@ -59,8 +73,8 @@ class CadenceStateMachine:
 
     @staticmethod
     def _check_frequency(value: float) -> float:
-        if not math.isfinite(value) or not 0.5 <= value <= 2.0:
-            raise ValueError("frequency must be between 0.5 and 2.0 Hz")
+        if not math.isfinite(value) or not 0.25 <= value <= 2.0:
+            raise ValueError("frequency must be between 0.25 and 2.0 Hz")
         return float(value)
 
     @property
@@ -74,6 +88,7 @@ class CadenceStateMachine:
             - self.current_transfer_s
             - self.current_lift_s
             - self.current_lower_s
+            - landing_settle_s(self.target_period_s)
         )
 
     @property
@@ -98,11 +113,13 @@ class CadenceStateMachine:
         transfer = self.current_transfer_s
         lift = self.current_lift_s
         lower = self.current_lower_s
+        settle = landing_settle_s(period)
         intervals = (
             (Phase.TRANSFER, 0.0, transfer),
             (Phase.LIFT, transfer, transfer + lift),
-            (Phase.HOLD, transfer + lift, period - lower),
-            (Phase.LOWER, period - lower, period),
+            (Phase.HOLD, transfer + lift, period - lower - settle),
+            (Phase.LOWER, period - lower - settle, period - settle),
+            (Phase.SETTLE, period - settle, period + self.handoff_hold_s),
         )
         for phase, start, end in intervals:
             if t < end:
@@ -122,7 +139,7 @@ class CadenceStateMachine:
             elapsed_s=t,
             target_period_s=period,
             phase_progress=1.0,
-            touchdown_late_s=t - period,
+            touchdown_late_s=t - period - self.handoff_hold_s,
         )
 
     def advance(
@@ -130,24 +147,33 @@ class CadenceStateMachine:
         dt: float,
         contacts: tuple[bool, bool],
         swing_clearance_m: float | None = None,
+        landing_ready: bool = True,
     ) -> StepState:
         if not math.isfinite(dt) or dt <= 0:
             raise ValueError("dt must be finite and positive")
         if len(contacts) != 2:
             raise ValueError("contacts must contain two feet")
+        lift_allowed = self.elapsed_s + 1e-9 >= self.current_transfer_s
         self.elapsed_s += dt
         if swing_clearance_m is None:
-            if not contacts[self.swing_foot]:
+            if self.elapsed_s >= self.current_transfer_s and not contacts[self.swing_foot]:
                 self._swing_airborne_seen = True
         else:
             self._clearance_run = (
-                self._clearance_run + 1 if swing_clearance_m >= 0.003 else 0
+                self._clearance_run + 1
+                if lift_allowed and swing_clearance_m >= MIN_SWING_CLEARANCE_M
+                else 0
             )
-            if self._clearance_run * dt >= 0.1:
+            if self._clearance_run * dt >= MIN_SWING_CLEARANCE_S:
                 self._swing_airborne_seen = True
-        period = self.target_period_s
-        if self.elapsed_s >= period and all(contacts) and self._swing_airborne_seen:
-            overshoot = self.elapsed_s - period
+        period = self.target_period_s + self.handoff_hold_s
+        if (
+            self.elapsed_s + 1e-9 >= period
+            and all(contacts)
+            and self._swing_airborne_seen
+            and landing_ready
+        ):
+            overshoot = max(0.0, self.elapsed_s - period)
             self.elapsed_s = overshoot if overshoot <= dt else 0.0
             self.swing_foot = 1 - self.swing_foot
             self._swing_airborne_seen = False

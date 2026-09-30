@@ -30,6 +30,7 @@
   </actuator>
 
   <sensor>
+    <gyro name="gyro" site="base_imu"/>
     <distance name="foot_0_clearance" geom1="floor" geom2="foot_0_collisions" cutoff="0.1"/>
     <distance name="foot_1_clearance" geom1="floor" geom2="foot_1_collisions" cutoff="0.1"/>
     <distance name="foot_foot_distance" geom1="foot_0_collisions" geom2="foot_1_collisions" cutoff="0.1"/>
@@ -49,5 +50,6 @@
 
   <keyframe>
     <key name="stand" qpos="0 -0.06 0 1 0 0 0 0.312 0.837 -2.02 2.02 -0.837 -0.312"/>
+    <key name="straight_up" qpos="0 -0.06 0 1 0 0 0 0 0 0 0 0 0"/>
   </keyframe>
 </mujoco>

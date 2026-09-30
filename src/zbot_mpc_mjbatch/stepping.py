@@ -11,7 +11,13 @@ import numpy as np
 
 from .cadence import CadenceStateMachine, Phase
 from .model import load_model
-from .mpc import MIN_SINGLE_SUPPORT_FORCE_N, StepMPC, StepPlan
+from .mpc import (
+    LANDING_CONTACT_S,
+    MIN_SINGLE_SUPPORT_FORCE_N,
+    StepMPC,
+    StepPlan,
+    landing_state_is_safe,
+)
 from .rollout import BatchRollout
 
 
@@ -43,16 +49,21 @@ class StepRun:
         initial_xy = self.base_pos_w[0, :2]
         drift = np.linalg.norm(self.base_pos_w[:, :2] - initial_xy, axis=1)
         support = 1 - self.swing_feet
-        single = self.foot_contacts[np.arange(len(support)), support] & ~self.foot_contacts[
-            np.arange(len(support)), self.swing_feet
-        ]
+        single = (
+            self.foot_contacts[np.arange(len(support)), support]
+            & ~self.foot_contacts[np.arange(len(support)), self.swing_feet]
+        )
         com_margins = self.support_com_margin_m[single]
         cop_margins = self.support_cop_margin_m[single]
         cop_margins = cop_margins[np.isfinite(cop_margins)]
         support_contacts_all = self.foot_contacts[np.arange(len(support)), support]
-        single_support_forces = self.foot_normal_force_n[np.arange(len(support)), support][single]
+        actual_single_support = self.foot_contacts.sum(axis=1) == 1
+        single_support_forces = self.foot_normal_force_n.sum(axis=1)[actual_single_support]
+        transfer = np.array([phase == Phase.TRANSFER for phase in self.phases])
+        unsupported = ~self.foot_contacts.any(axis=1)
         dt = float(self.times_s[0])
         boundaries = np.searchsorted(self.times_s, self.landing_times_s, side="right")
+        landing_qvel = self.qvel[boundaries - 1] if len(boundaries) else np.empty((0, 12))
         maximum_support_motion = 0.0
         for step_start, step_end in zip(
             np.r_[0, boundaries], np.r_[boundaries, len(self.times_s)], strict=True
@@ -67,6 +78,7 @@ class StepRun:
             )
         peak_clearances: list[float] = []
         clear_runs: list[float] = []
+        clear_5mm_runs: list[float] = []
         support_contacts: list[float] = []
         all_phase_support_contacts: list[float] = []
         support_motions: list[float] = []
@@ -83,6 +95,10 @@ class StepRun:
             changes = np.diff(above)
             run_lengths = np.where(changes == -1)[0] - np.where(changes == 1)[0]
             clear_runs.append(float(np.max(run_lengths, initial=0) * dt))
+            above_5mm = np.r_[False, clearance >= 0.005, False].astype(np.int8)
+            changes_5mm = np.diff(above_5mm)
+            run_lengths_5mm = np.where(changes_5mm == -1)[0] - np.where(changes_5mm == 1)[0]
+            clear_5mm_runs.append(float(np.max(run_lengths_5mm, initial=0) * dt))
             peak_clearances.append(float(clearance.max()))
             support_contacts.append(float(self.foot_contacts[start:end, support_foot][held].mean()))
             all_phase_support_contacts.append(
@@ -97,21 +113,54 @@ class StepRun:
             "simulated_seconds": round(float(self.times_s[-1]), 3),
             "terminated_early": self.stop_reason is not None,
             "stop_reason": self.stop_reason,
-            "support_contact_loss_frames": int((~support_contacts_all).sum()),
+            "support_contact_loss_frames": int(
+                ((~support_contacts_all & ~transfer) | unsupported).sum()
+            ),
+            "unsupported_frames": int(unsupported.sum()),
+            "transfer_contact_switch_frames": int(
+                (~support_contacts_all & transfer & ~unsupported).sum()
+            ),
             "minimum_single_support_force_n": (
-                round(float(single_support_forces.min()), 2)
-                if len(single_support_forces) else None
+                round(float(single_support_forces.min()), 2) if len(single_support_forces) else None
             ),
             "weak_single_support_frames": int(
                 (single_support_forces < MIN_SINGLE_SUPPORT_FORCE_N).sum()
             ),
             "maximum_support_xy_motion_all_frames_m": round(maximum_support_motion, 4),
             "completed_steps": len(self.landing_times_s),
+            "rl_prior_selected_steps": int(
+                sum(bool(plan.rl_prior_selected) for plan in self.plans)
+            ),
+            "mean_landing_interval_s": (
+                round(float(np.diff(self.landing_times_s).mean()), 3)
+                if len(self.landing_times_s) > 1
+                else None
+            ),
+            "maximum_landing_interval_s": (
+                round(float(np.diff(self.landing_times_s).max()), 3)
+                if len(self.landing_times_s) > 1
+                else None
+            ),
             "maximum_planned_step_duration_s": round(
                 max((plan.period_s for plan in self.plans), default=0.0), 3
             ),
             "minimum_base_height_m": round(float(self.base_pos_w[:, 2].min()), 4),
             "maximum_xy_drift_m": round(float(drift.max()), 4),
+            "maximum_landing_linear_speed_m_s": (
+                round(float(np.linalg.norm(landing_qvel[:, :3], axis=1).max()), 4)
+                if len(landing_qvel)
+                else None
+            ),
+            "maximum_landing_angular_speed_rad_s": (
+                round(float(np.linalg.norm(landing_qvel[:, 3:6], axis=1).max()), 4)
+                if len(landing_qvel)
+                else None
+            ),
+            "maximum_landing_joint_speed_rad_s": (
+                round(float(np.linalg.norm(landing_qvel[:, 6:], axis=1).max()), 4)
+                if len(landing_qvel)
+                else None
+            ),
             "wall_seconds": round(self.wall_seconds, 3),
             "both_feet_contact_at_end": bool(self.foot_contacts[-1].all()),
             "minimum_single_support_com_margin_m": (
@@ -123,8 +172,9 @@ class StepRun:
             "minimum_step_peak_clearance_m": (
                 round(min(peak_clearances), 4) if peak_clearances else None
             ),
-            "minimum_step_3mm_clearance_run_s": (
-                round(min(clear_runs), 3) if clear_runs else None
+            "minimum_step_3mm_clearance_run_s": (round(min(clear_runs), 3) if clear_runs else None),
+            "minimum_step_5mm_clearance_run_s": (
+                round(min(clear_5mm_runs), 3) if clear_5mm_runs else None
             ),
             "minimum_step_support_contact_fraction": (
                 round(min(support_contacts), 3) if support_contacts else None
@@ -147,23 +197,27 @@ def simulate_steps(
     frequency_hz: float = 0.5,
     seconds: float = 4.2,
     num_candidates: int = 256,
-    iterations: int = 16,
+    iterations: int = 24,
     num_threads: int = 0,
     seed: int = 4,
+    use_rl_prior: bool = False,
 ) -> StepRun:
     """Optimize each step from the latest measured state and simulate its execution."""
     if not np.isfinite(seconds) or seconds <= 0:
         raise ValueError("seconds must be finite and positive")
     model = load_model()
-    plant = BatchRollout(model, 1)
+    plant = BatchRollout(model, 1, substeps_per_control=1)
     plant.reset_to_stand()
-    cadence = CadenceStateMachine(frequency_hz, first_swing_foot=1)
     mpc = StepMPC(
         model,
         num_candidates=num_candidates,
         iterations=iterations,
         num_threads=num_threads,
         seed=seed,
+        use_rl_prior=use_rl_prior,
+    )
+    cadence = CadenceStateMachine(
+        frequency_hz, first_swing_foot=1, handoff_hold_s=mpc.settle_s
     )
     count = int(np.ceil(seconds / plant.control_dt))
     times = np.arange(1, count + 1) * plant.control_dt
@@ -193,9 +247,14 @@ def simulate_steps(
         state = cadence.state()
         if active_plan is None or active_plan.swing_foot != state.swing_foot:
             active_plan = None
+            # The final partial step also needs a validated plan. Simply holding
+            # the nominal pose can lose support even after a safe touchdown.
             error: RuntimeError | None = None
             periods = sorted(
-                {min(2.0, state.target_period_s * value) for value in (1.0, 1.2, 1.5, 2.0, 3.0, 4.0)}
+                {
+                    min(4.0, state.target_period_s * value)
+                    for value in (1.0, 1.2, 1.5, 2.0, 3.0, 4.0)
+                }
             )
             for period_s in periods:
                 try:
@@ -216,6 +275,9 @@ def simulate_steps(
                 stop_reason = str(error)
                 break
             cadence.frequency_hz = 1.0 / active_plan.period_s
+            # Retain the feasible pace for the next support exchange. The
+            # initial requested frequency is a starting point, not a deadline.
+            cadence.pending_frequency_hz = cadence.frequency_hz
             state = cadence.state()
             plans.append(active_plan)
         command = mpc.target(active_plan, state.elapsed_s)
@@ -246,19 +308,16 @@ def simulate_steps(
         swings[i] = state.swing_foot
         phases.append(state.phase)
         completed_frames = i + 1
-        if not contacts[i, support]:
+        if not contacts[i].any() or (state.phase != Phase.TRANSFER and not contacts[i, support]):
             stop_reason = (
                 f"support foot {support} lost contact at {times[i]:.2f} s; "
                 f"other foot contact={bool(contacts[i, state.swing_foot])}, "
                 f"force={normal_force[i, state.swing_foot]:.1f} N"
             )
             break
-        if (
-            not contacts[i, state.swing_foot]
-            and normal_force[i, support] < MIN_SINGLE_SUPPORT_FORCE_N
-        ):
+        if contacts[i].sum() == 1 and normal_force[i].sum() < MIN_SINGLE_SUPPORT_FORCE_N:
             stop_reason = (
-                f"support foot {support} carried only {normal_force[i, support]:.1f} N "
+                f"single support carried only {normal_force[i].sum():.1f} N "
                 f"during single support at {times[i]:.2f} s"
             )
             break
@@ -266,9 +325,24 @@ def simulate_steps(
             plant.control_dt,
             (bool(contacts[i, 0]), bool(contacts[i, 1])),
             float(clearance[i, state.swing_foot]),
+            landing_ready=bool(
+                landing_state_is_safe(
+                    contacts[
+                        max(0, i + 1 - int(np.ceil(LANDING_CONTACT_S / plant.control_dt))) : i + 1
+                    ],
+                    normal_force[i],
+                    qvel[i],
+                    state.swing_foot,
+                    state.target_period_s,
+                    quiet=True,
+                )
+            ),
         )
         if next_state.swing_foot != state.swing_foot:
             landings.append(float(times[i]))
+        elif next_state.touchdown_late_s > 0.4:
+            stop_reason = f"landing did not meet measured clearance/load guards at {times[i]:.2f} s"
+            break
     return StepRun(
         times[:completed_frames],
         qpos[:completed_frames],
@@ -296,12 +370,23 @@ def simulate_steps(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--frequency", type=float, default=0.5, help="alternating landings per second")
+    parser.add_argument(
+        "--frequency",
+        type=float,
+        default=0.5,
+        help="initial landings per second; safe slower periods are retained",
+    )
     parser.add_argument("--seconds", type=float, default=4.2)
     parser.add_argument("--candidates", type=int, default=256)
-    parser.add_argument("--iterations", type=int, default=16)
+    parser.add_argument("--iterations", type=int, default=24)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--seed", type=int, default=4)
+    parser.add_argument(
+        "--rl-prior",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="enable experimental PPO proposals (disabled by default)",
+    )
     args = parser.parse_args()
     try:
         run = simulate_steps(
@@ -311,6 +396,7 @@ def main() -> None:
             args.iterations,
             args.threads,
             args.seed,
+            args.rl_prior,
         )
     except ValueError as error:
         parser.error(str(error))

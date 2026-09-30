@@ -37,6 +37,7 @@
                 <geom name="b3_visuals" type="mesh" mesh="mesh_cdb66879ba3b5662" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
                 <geom name="b3_collisions" type="mesh" mesh="mesh_cdb66879ba3b5662" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />
                 <body name="base" pos="0 0 0.053" quat="1 0 0 0">
+                  <site name="base_imu" pos="0 0 0" size="0.002"/>
                   <inertial mass="0.2504200041294098" pos="-0.00825919955969 -5.10630009387e-08 0.0283449999988" diaginertia="0.000220404006541 0.000199720001547 0.000292355980491" quat="0.931715548038 -8.35549712974e-07 0.363188832998 -2.14349825001e-06" />
                   <geom name="base_visuals" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="2" contype="0" conaffinity="0" density="0" rgba="0.08 0.2 0.8 1" />
                   <geom name="base_collisions" type="mesh" mesh="mesh_b2f807ccdba07ce2" group="3" contype="1" conaffinity="1" density="0" rgba="0.25 0.35 0.55 0" friction="1 0.005 0.0001" condim="3" />

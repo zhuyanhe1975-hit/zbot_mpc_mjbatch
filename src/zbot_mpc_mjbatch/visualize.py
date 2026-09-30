@@ -11,12 +11,14 @@ from pathlib import Path
 
 import mujoco
 
+from .double_to_single import SingleSupportRun, simulate_raise
 from .model import load_model
 from .stepping import StepRun, simulate_steps
+from .trajectory import load_step_run, save_step_run
 
 
 def render_video(
-    run: StepRun,
+    run: StepRun | SingleSupportRun,
     output: Path,
     width: int = 800,
     height: int = 600,
@@ -43,7 +45,11 @@ def render_video(
     option = mujoco.MjvOption()
     option.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 1
     feet = [model.geom(f"foot_{i}_visuals").id for i in (0, 1)]
-    frame_dt = float(run.times_s[1] - run.times_s[0]) if len(run.times_s) > 1 else float(run.times_s[0])
+    frame_dt = (
+        float(run.times_s[1] - run.times_s[0]) if len(run.times_s) > 1 else float(run.times_s[0])
+    )
+    # Keep the 200 Hz physics trajectory, while exporting at about 50 fps.
+    frame_stride = max(1, round(1.0 / (50.0 * frame_dt)))
     command = [
         ffmpeg,
         "-y",
@@ -57,7 +63,7 @@ def render_video(
         "-video_size",
         f"{width}x{height}",
         "-framerate",
-        f"{speed / frame_dt:.6f}",
+        f"{speed / (frame_dt * frame_stride):.6f}",
         "-i",
         "-",
         "-an",
@@ -76,12 +82,12 @@ def render_video(
     try:
         assert process.stdin is not None
         assert process.stderr is not None
-        for i, qpos in enumerate(run.qpos):
-            data.qpos[:] = qpos
+        for i in range(0, len(run.qpos), frame_stride):
+            data.qpos[:] = run.qpos[i]
             data.qvel[:] = run.qvel[i]
             data.ctrl[:] = run.ctrl[i]
             data.time = float(run.times_s[i])
-            swing = int(run.swing_feet[i])
+            swing = int(run.swing_feet[i]) if isinstance(run, StepRun) else 1
             model.geom_rgba[feet[swing]] = (1.0, 0.35, 0.12, 1.0)
             model.geom_rgba[feet[1 - swing]] = (0.15, 0.55, 1.0, 1.0)
             mujoco.mj_forward(model, data)
@@ -103,39 +109,71 @@ def render_video(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--frequency", type=float, default=0.5)
+    parser.add_argument(
+        "--single-support", action="store_true", help="replay double-to-single transition"
+    )
     parser.add_argument("--seconds", type=float, default=4.2)
     parser.add_argument("--candidates", type=int, default=256)
-    parser.add_argument("--iterations", type=int, default=16)
+    parser.add_argument("--iterations", type=int, default=None)
     parser.add_argument("--threads", type=int, default=0)
     parser.add_argument("--seed", type=int, default=4)
+    parser.add_argument(
+        "--rl-prior",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="enable experimental PPO proposals (disabled by default)",
+    )
     parser.add_argument("--speed", type=float, default=1.0, help="video speed multiplier")
     parser.add_argument("--width", type=int, default=800)
     parser.add_argument("--height", type=int, default=600)
-    parser.add_argument("--output", type=Path, default=Path("dist/zbot_stepping.mp4"))
-    parser.add_argument("--viewer", action="store_true", help="replay in MuJoCo's interactive viewer")
+    parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument(
+        "--trajectory", type=Path, help="save the measured stepping trajectory to NPZ"
+    )
+    parser.add_argument("--replay", type=Path, help="replay a saved NPZ without running MPC again")
+    parser.add_argument(
+        "--viewer", action="store_true", help="replay in MuJoCo's interactive viewer"
+    )
     parser.add_argument("--once", action="store_true", help="close the viewer after one replay")
     args = parser.parse_args()
+    if args.single_support and (args.replay or args.trajectory):
+        parser.error("--replay and --trajectory are supported for alternating stepping only")
     if not math.isfinite(args.speed) or args.speed <= 0:
         parser.error("--speed must be finite and positive")
     if args.width <= 0 or args.height <= 0 or args.width % 2 or args.height % 2:
         parser.error("--width and --height must be positive even numbers")
     try:
-        run = simulate_steps(
-            args.frequency,
-            args.seconds,
-            args.candidates,
-            args.iterations,
-            args.threads,
-            args.seed,
-        )
-    except ValueError as error:
+        if args.replay:
+            run = load_step_run(args.replay)
+        elif args.single_support:
+            run = simulate_raise(
+                candidates=args.candidates,
+                iterations=40 if args.iterations is None else args.iterations,
+                threads=args.threads,
+                seed=args.seed,
+            )
+        else:
+            run = simulate_steps(
+                args.frequency,
+                args.seconds,
+                args.candidates,
+                24 if args.iterations is None else args.iterations,
+                args.threads,
+                args.seed,
+                args.rl_prior,
+            )
+    except (ValueError, OSError, KeyError) as error:
         parser.error(str(error))
+    if args.trajectory:
+        save_step_run(run, args.trajectory)
     if args.viewer:
         from .viewer import play_viewer
 
         print(
             json.dumps(
-                {**run.summary(), "landing_times_s": run.landing_times_s.round(3).tolist()},
+                run.summary()
+                if args.single_support
+                else {**run.summary(), "landing_times_s": run.landing_times_s.round(3).tolist()},
                 indent=2,
             ),
             flush=True,
@@ -146,13 +184,20 @@ def main() -> None:
         except KeyboardInterrupt:
             pass
         return
-    render_video(run, args.output, args.width, args.height, args.speed)
+    output = args.output or Path(
+        "dist/zbot_single_support.mp4" if args.single_support else "dist/zbot_stepping.mp4"
+    )
+    render_video(run, output, args.width, args.height, args.speed)
     print(
         json.dumps(
             {
                 **run.summary(),
-                "landing_times_s": run.landing_times_s.round(3).tolist(),
-                "video": str(args.output.resolve()),
+                **(
+                    {}
+                    if args.single_support
+                    else {"landing_times_s": run.landing_times_s.round(3).tolist()}
+                ),
+                "video": str(output.resolve()),
             },
             indent=2,
         )

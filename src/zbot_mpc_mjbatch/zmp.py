@@ -20,6 +20,7 @@ def _zmp_schedule(
     period_s: float,
     transfer_s: float,
     lower_s: float,
+    settle_s: float = 0.0,
 ) -> np.ndarray:
     step = np.floor(times_s / period_s).astype(int)
     local = times_s - step * period_s
@@ -28,7 +29,7 @@ def _zmp_schedule(
     support_center = foot_xy[support]
     weight = np.minimum(
         np.clip(local / transfer_s, 0.0, 1.0),
-        np.clip((period_s - local) / lower_s, 0.0, 1.0),
+        np.clip((period_s - settle_s - local) / lower_s, 0.0, 1.0),
     )
     return center + weight[:, None] * (support_center - center)
 
@@ -44,6 +45,7 @@ def plan_zmp_preview(
     horizon: int,
     transfer_s: float = 0.3,
     lower_s: float = 0.12,
+    settle_s: float = 0.0,
 ) -> ZMPPreview:
     """Preview future support ZMP, then integrate the bounded LIPM DCM backward."""
     if com_height_m <= 0 or horizon < 1 or control_dt <= 0:
@@ -51,7 +53,7 @@ def plan_zmp_preview(
     omega = np.sqrt(9.81 / com_height_m)
     extra = int(np.ceil(2.0 * period_s / control_dt))
     grid = elapsed_s + np.arange(horizon + extra + 1) * control_dt
-    zmp = _zmp_schedule(grid, foot_xy, swing_foot, period_s, transfer_s, lower_s)
+    zmp = _zmp_schedule(grid, foot_xy, swing_foot, period_s, transfer_s, lower_s, settle_s)
     decay = np.exp(-omega * control_dt)
     dcm = np.empty_like(zmp)
     dcm[-1] = zmp[-1]

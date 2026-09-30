@@ -9,11 +9,12 @@ import time
 import mujoco
 import mujoco.viewer
 
+from .double_to_single import SingleSupportRun
 from .model import load_model
 from .stepping import StepRun
 
 
-def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
+def play_viewer(run: StepRun | SingleSupportRun, speed: float = 1.0, once: bool = False) -> None:
     """Replay measured states; Space pauses, N advances, and R restarts."""
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("speed must be finite and positive")
@@ -77,7 +78,7 @@ def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
                     break
                 index = 0
                 deadline = time.perf_counter()
-            swing = int(run.swing_feet[index])
+            swing = int(run.swing_feet[index]) if isinstance(run, StepRun) else 1
             with viewer.lock():
                 data.qpos[:] = run.qpos[index]
                 data.qvel[:] = run.qvel[index]

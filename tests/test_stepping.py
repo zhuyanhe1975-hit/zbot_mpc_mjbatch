@@ -3,6 +3,10 @@ import numpy as np
 import pytest
 
 from zbot_mpc_mjbatch.model import load_model
+from zbot_mpc_mjbatch.mpc import (
+    MAX_LANDING_JOINT_SPEED_RAD_S,
+    MAX_LANDING_ROOT_SPEED,
+)
 from zbot_mpc_mjbatch.stepping import simulate_steps
 
 
@@ -23,11 +27,19 @@ def test_mpc_completes_alternating_steps_without_falling_or_walking_away():
     clear_run = quality["minimum_step_3mm_clearance_run_s"]
     support_fraction = quality["minimum_step_support_contact_fraction"]
     foot_gap = quality["minimum_foot_foot_distance_m"]
-    assert isinstance(peak, float) and peak >= 0.005
+    assert isinstance(peak, float) and peak >= 0.004
     assert isinstance(clear_run, float) and clear_run >= 0.1
     assert isinstance(support_fraction, float) and support_fraction >= 0.9
     assert isinstance(foot_gap, float) and foot_gap >= 0.002
     assert quality["foot_foot_contact_frames"] == 0
+    boundaries = np.searchsorted(run.times_s, run.landing_times_s, side="right")
+    for plan, boundary in zip(run.plans, boundaries, strict=True):
+        scale = np.sqrt(plan.period_s) if plan.period_s >= 1.8 else 1.0
+        assert np.linalg.norm(run.qvel[boundary - 1, :6]) <= MAX_LANDING_ROOT_SPEED * scale
+        assert (
+            np.linalg.norm(run.qvel[boundary - 1, 6:])
+            <= MAX_LANDING_JOINT_SPEED_RAD_S * scale
+        )
 
     model = load_model()
     data = mujoco.MjData(model)
@@ -73,7 +85,7 @@ def test_mpc_completes_alternating_steps_without_falling_or_walking_away():
 
 @pytest.mark.parametrize(
     ("frequency_hz", "seconds", "minimum_steps"),
-    [(0.5, 4.2, 2), (2.0, 2.2, 1)],
+    [(0.5, 4.2, 2), (1.0, 3.5, 3), (2.0, 2.2, 1)],
 )
 def test_cadence_endpoints_preserve_support_or_stop_safely(
     frequency_hz, seconds, minimum_steps

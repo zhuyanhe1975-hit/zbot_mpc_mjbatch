@@ -97,6 +97,16 @@ class FootSupportGeometry:
             polygons.append(vertices[bottom[hull]].copy())
         self.local_polygons = tuple(polygons)
 
+    def polygon_world(
+        self, geom_pos_w: np.ndarray, geom_mat_w: np.ndarray, foot: int
+    ) -> np.ndarray:
+        """Sole polygon in world coordinates over arbitrary leading axes."""
+        rotation = geom_mat_w.reshape(geom_mat_w.shape[:-1] + (3, 3))
+        return (
+            np.einsum("...ij,kj->...ki", rotation, self.local_polygons[foot])
+            + geom_pos_w[..., None, :]
+        )
+
     def margin(
         self,
         point_xy: np.ndarray,
@@ -105,9 +115,19 @@ class FootSupportGeometry:
         foot: int,
     ) -> np.ndarray:
         """Signed point-to-sole margin for one foot over arbitrary leading axes."""
-        rotation = geom_mat_w.reshape(geom_mat_w.shape[:-1] + (3, 3))
-        polygon_w = (
-            np.einsum("...ij,kj->...ki", rotation, self.local_polygons[foot])
-            + geom_pos_w[..., None, :]
+        return signed_polygon_margin(
+            point_xy, self.polygon_world(geom_pos_w, geom_mat_w, foot)[..., :2]
         )
-        return signed_polygon_margin(point_xy, polygon_w[..., :2])
+
+    def double_support_margin(
+        self, point_xy: np.ndarray, geom_pos_w: np.ndarray, geom_mat_w: np.ndarray
+    ) -> float:
+        """Signed ZMP margin within the convex hull of both sole polygons."""
+        points = np.concatenate(
+            [
+                self.polygon_world(geom_pos_w[foot], geom_mat_w[foot], foot)[:, :2]
+                for foot in (0, 1)
+            ]
+        )
+        hull = points[_convex_hull_indices(points)]
+        return float(signed_polygon_margin(point_xy, hull))

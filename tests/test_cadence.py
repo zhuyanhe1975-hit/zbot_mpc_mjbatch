@@ -11,8 +11,8 @@ def test_frequency_changes_single_support_hold_time():
     assert slow.current_transfer_s == pytest.approx(0.9)
     assert slow.current_lift_s == pytest.approx(0.3)
     assert slow.current_lower_s == pytest.approx(0.3)
-    assert slow.hold_s == pytest.approx(0.5)
-    assert fast.hold_s == pytest.approx(0.11)
+    assert slow.hold_s == pytest.approx(0.2)
+    assert fast.hold_s == pytest.approx(0.03)
 
 
 def test_contact_guards_switch_and_frequency_change_waits_for_landing():
@@ -60,7 +60,7 @@ def test_real_clearance_must_persist_before_landing_counts():
     assert state.phase == Phase.WAIT_CONTACT
     assert state.swing_foot == 0
     for _ in range(5):
-        gait.advance(0.02, (False, True), 0.004)
+        gait.advance(0.02, (False, True), 0.006)
     assert gait.advance(0.02, (True, True), 0.0).swing_foot == 1
 
 
