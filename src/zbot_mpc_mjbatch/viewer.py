@@ -9,15 +9,21 @@ import time
 import mujoco
 import mujoco.viewer
 
+from .double_leg import DoubleLegRun
 from .model import load_model
+from .single_leg import SingleLegRun
 from .stepping import StepRun
 
 
-def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
+def play_viewer(
+    run: StepRun | SingleLegRun | DoubleLegRun, speed: float = 1.0, once: bool = False
+) -> None:
     """Replay measured states; Space pauses, N advances, and R restarts."""
     if not math.isfinite(speed) or speed <= 0:
         raise ValueError("speed must be finite and positive")
     model = load_model()
+    if isinstance(run, (SingleLegRun, DoubleLegRun)):
+        model.opt.timestep = run.physics_timestep_s
     data = mujoco.MjData(model)
     foot_geoms = [model.geom(f"foot_{foot}_visuals").id for foot in (0, 1)]
     frame_dt = float(run.times_s[1] - run.times_s[0]) if len(run.times_s) > 1 else float(run.times_s[0])
@@ -52,10 +58,11 @@ def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
     ]
     try:
         with viewer.lock():
-            viewer.cam.lookat[:] = (0.0, 0.0, 0.25)
-            viewer.cam.distance = 1.0
-            viewer.cam.azimuth = 135
-            viewer.cam.elevation = -20
+            single_leg = isinstance(run, (SingleLegRun, DoubleLegRun))
+            viewer.cam.lookat[:] = (0.0, 0.0, 0.3 if single_leg else 0.1)
+            viewer.cam.distance = 1.15 if single_leg else 1.0
+            viewer.cam.azimuth = 135 if single_leg else 45
+            viewer.cam.elevation = -12 if single_leg else -15
             viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = 1
         viewer.sync()
         index = 0
@@ -77,7 +84,8 @@ def play_viewer(run: StepRun, speed: float = 1.0, once: bool = False) -> None:
                     break
                 index = 0
                 deadline = time.perf_counter()
-            swing = int(run.swing_feet[index])
+            swing_feet = getattr(run, "swing_feet", None)
+            swing = int(swing_feet[index]) if swing_feet is not None else run.swing_foot
             with viewer.lock():
                 data.qpos[:] = run.qpos[index]
                 data.qvel[:] = run.qvel[index]

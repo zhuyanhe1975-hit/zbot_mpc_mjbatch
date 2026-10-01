@@ -38,6 +38,7 @@ class StepRun:
     landing_times_s: np.ndarray
     plans: tuple[StepPlan, ...]
     wall_seconds: float
+    requested_frequency_hz: float
     stop_reason: str | None = None
 
     def summary(self) -> dict[str, float | int | bool | str | None]:
@@ -72,6 +73,12 @@ class StepRun:
         all_phase_support_contacts: list[float] = []
         support_motions: list[float] = []
         support_forces: list[float] = []
+        landing_intervals = np.diff(np.r_[0.0, self.landing_times_s])
+        achieved_frequency = (
+            len(self.landing_times_s) / self.landing_times_s[-1]
+            if len(self.landing_times_s)
+            else 0.0
+        )
         for index, end in enumerate(boundaries):
             start = 0 if index == 0 else boundaries[index - 1]
             held = np.array([phase == Phase.HOLD for phase in self.phases[start:end]])
@@ -108,6 +115,21 @@ class StepRun:
             ),
             "maximum_support_xy_motion_all_frames_m": round(maximum_support_motion, 4),
             "completed_steps": len(self.landing_times_s),
+            "requested_frequency_hz": round(self.requested_frequency_hz, 3),
+            "achieved_landing_frequency_hz": round(float(achieved_frequency), 3),
+            "cadence_tracking_ratio": round(
+                float(achieved_frequency / self.requested_frequency_hz), 3
+            ),
+            "minimum_step_frequency_hz": (
+                round(float((1.0 / landing_intervals).min()), 3)
+                if len(landing_intervals)
+                else None
+            ),
+            "maximum_step_frequency_hz": (
+                round(float((1.0 / landing_intervals).max()), 3)
+                if len(landing_intervals)
+                else None
+            ),
             "maximum_planned_step_duration_s": round(
                 max((plan.period_s for plan in self.plans), default=0.0), 3
             ),
@@ -143,6 +165,34 @@ class StepRun:
             "minimum_foot_foot_distance_m": round(float(self.foot_foot_distance_m.min()), 4),
             "foot_foot_contact_frames": int(self.foot_foot_contact.sum()),
         }
+
+
+def periodic_search_budget(frequency_hz: float) -> tuple[int, int]:
+    """Validated sampling budget for sustained stepping across the cadence range."""
+    if not np.isfinite(frequency_hz) or not 0.5 <= frequency_hz <= 2.0:
+        raise ValueError("periodic stepping frequency must be between 0.5 and 2.0 Hz")
+    return (64, 4) if frequency_hz <= 0.5 else (128, 8)
+
+
+def simulate_periodic_steps(
+    frequency_hz: float,
+    steps: int = 8,
+    num_threads: int = 0,
+    seed: int = 4,
+) -> StepRun:
+    """Run a safety-filtered alternating periodic segment at the requested cadence."""
+    if steps < 1:
+        raise ValueError("periodic step count must be positive")
+    candidates, iterations = periodic_search_budget(frequency_hz)
+    return simulate_steps(
+        frequency_hz=frequency_hz,
+        seconds=2.0 * steps / frequency_hz + 1.0,
+        num_candidates=candidates,
+        iterations=iterations,
+        num_threads=num_threads,
+        seed=seed,
+        max_steps=steps,
+    )
 
 
 def simulate_steps(
@@ -326,6 +376,7 @@ def simulate_steps(
         np.asarray(landings),
         tuple(plans),
         time.perf_counter() - start,
+        frequency_hz,
         stop_reason,
     )
 

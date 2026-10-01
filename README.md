@@ -36,6 +36,82 @@ uv run pytest -q
   --steps 2 --seconds 9 --candidates 64 --iterations 4 --threads 8
 ```
 
+## 交互式回放
+
+交互式 Viewer 按记录的实际闭环状态回放机器人，不叠加 MPC 预测轨迹。
+
+```bash
+./visualize.sh --viewer --frequency 0.5 --steps 2 --seconds 5 \
+  --candidates 64 --iterations 4 --threads 8
+```
+
+## 0.5–2 Hz 周期踏步
+
+周期模式会连续规划八次左右交替落脚，并自动选用已验证的搜索预算：0.5 Hz 使用 64 条候选、4 轮迭代，1–2 Hz 使用 128 条候选、8 轮迭代。每只脚上一条通过硬约束的计划会保留为下一周期的候选，但不会替代从实测状态重新优化。
+
+```bash
+uv run zbot-mpc-periodic --frequency 0.5 --steps 8 --threads 8
+uv run zbot-mpc-periodic --frequency 1.0 --steps 8 --threads 8
+uv run zbot-mpc-periodic --frequency 1.5 --steps 8 --threads 8
+uv run zbot-mpc-periodic --frequency 2.0 --steps 8 --threads 8
+```
+
+交互回放时，0.5 Hz 使用：
+
+```bash
+./visualize.sh --viewer --frequency 0.5 --steps 8 --seconds 18 \
+  --candidates 64 --iterations 4 --threads 8
+```
+
+1–2 Hz 使用：
+
+```bash
+./visualize.sh --viewer --frequency 2.0 --steps 8 --seconds 10 \
+  --candidates 128 --iterations 8 --threads 8
+```
+
+结果中的 `achieved_landing_frequency_hz` 和 `cadence_tracking_ratio` 根据真实落脚时刻计算。安全候选不足时允许延长单步，因此实际频率可能低于指令，但当前回归要求平均落脚频率不低于指令的 75%。
+
+## 单脚站立
+
+单脚模式从双脚站立启动，先用 MPC 将质心/ZMP 移到指定支撑脚上方，再抬起另一只脚。随后依照参考脚本的质心雅可比修正，在保持质心投影位于支撑脚上方的同时，用默认 6 秒将六个关节平滑归零，最终展开为约 58.3 cm 高的立柱。运行时持续监测支撑丢失、支撑力、摔倒和双脚碰撞。
+
+```bash
+uv run zbot-mpc-single-leg --support-foot 0 --hold-seconds 5 --threads 8
+uv run zbot-mpc-single-leg --support-foot 1 --hold-seconds 5 --threads 8
+```
+
+`--support-foot` 表示保持着地的脚（0 或 1）；`--unfold-seconds` 是从抬脚位姿展开到全关节归零的时间，`--hold-seconds` 表示成为立柱后的持续保持时间。
+
+单腿模式使用 1 ms 物理步长、20 ms 控制周期，规划和执行采用相同的积分精度；默认搜索为 64 条候选、8 轮迭代。伸直采用两端速度和加速度为零的五次曲线，减少进入最终保持时的激励。摘要中的 `last_second_hold_qvel_rms` 和 `last_second_hold_base_motion_m` 分别记录最后最多 1 秒保持期间的广义速度 RMS 与机身各轴位置极差的范数，用于观察微抖；提前结束且未进入保持时为 `null`。
+
+MuJoCo Viewer 中回放完整的双脚到单脚转换过程：
+
+```bash
+./single_leg_viewer.sh --support-foot 0 --hold-seconds 5 --threads 8
+# 或：
+uv run zbot-mpc-single-leg-viewer --support-foot 1 --hold-seconds 5 --threads 8
+```
+
+Viewer 中蓝色是支撑脚，橙色是抬起脚；空格暂停/继续，`N` 单帧前进，`R` 从头回放。`--speed 0.5` 可以慢放，`--once` 会在播放一遍后自动关闭。
+
+## 逆向 MPC：单腿立柱回到双脚站立
+
+逆向模式从正向单腿模式的实际最终状态继续：先折叠下降，再落脚并收稳，最后保持双脚站立。默认命令先在后台生成单腿立柱，回放只包含逆向过程；不会直接重置成双脚位姿。
+
+正向控制序列的逆序仅作为搜索初值。`ReturnMPC` 从当前实测位置、速度和控制量进行正向物理 rollout，优化平滑的关节修正；初次规划覆盖整个回落及稳定阶段，折叠完成后再次用实测状态规划剩余落脚过程。候选必须保持原支撑脚接触，单支撑时法向力至少 15 N，双脚间隙至少 2 mm，机身高度至少 22 cm；末端要求两脚持续接触且各承载至少 1 N，并检查关节目标误差和残余速度。找不到安全候选时停止，不执行未经验证的参考序列。
+
+```bash
+uv run zbot-mpc-double-leg --support-foot 0 --hold-seconds 3 --threads 8
+uv run zbot-mpc-double-leg --support-foot 1 --hold-seconds 3 --threads 8
+# 回放单腿立柱到双脚站立：
+./double_leg_viewer.sh --support-foot 0 --threads 8 --once
+```
+
+`--support-foot` 是起始单腿立柱的支撑脚。默认逆向搜索为 32 条候选、4 轮迭代，物理步长 1 ms、控制周期 20 ms；默认过渡约 8.98 秒，其中包含 1 秒落脚收稳，之后才开始 `--hold-seconds` 的保持。与现有步边界 MPC 一样，这属于离线阶段规划，不保证实时求解。
+
+已有成功的 `SingleLegRun` 可通过 `simulate_double_leg_stand(support_foot=column.support_foot, source_run=column)` 直接继续其最终状态。摘要提供 `mpc_replans`、`safe_candidate_evaluations`、双脚连续承载时长和末端速度 RMS。Viewer 保留暂停、单帧、重播操作，不叠加 MPC 轨迹。
+
 ## MPC teacher 与 learned warm-start
 
 第一阶段先用现有 MPC 产生安全专家计划，再拟合一个无额外运行时依赖的轻量策略：

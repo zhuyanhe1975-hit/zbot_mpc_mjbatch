@@ -149,7 +149,11 @@ def main() -> None:
             ),
             flush=True,
         )
-        print("MuJoCo viewer：空格暂停/继续，N 单帧前进，R 从头播放。关闭窗口退出。", flush=True)
+        print(
+            "MuJoCo Viewer：青色细线为 MPC 候选摆动脚轨迹，金色粗线为最优安全轨迹；"
+            "M 显示/隐藏轨迹，空格暂停/继续，N 单帧前进，R 从头播放。",
+            flush=True,
+        )
         try:
             play_viewer(run, args.speed, args.once)
         except KeyboardInterrupt:

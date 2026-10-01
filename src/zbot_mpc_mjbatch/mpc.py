@@ -32,6 +32,11 @@ class StepPlan:
     hold_knots: np.ndarray
     cost: float
     observation: np.ndarray
+    preview_start_s: float
+    preview_swing_paths_w: np.ndarray
+    preview_swing_clearance_m: np.ndarray
+    preview_selected_swing_path_w: np.ndarray
+    preview_selected_swing_clearance_m: np.ndarray
 
     @property
     def parameter_vector(self) -> np.ndarray:
@@ -58,10 +63,14 @@ class StepMPC:
         settle_s: float = 0.5,
         warm_start_policy: WarmStartPolicy | None = None,
         minimum_clearance_s: float = 0.1,
+        substeps_per_control: int = 4,
     ) -> None:
         if num_candidates < 8 or iterations < 1 or settle_s <= 0 or minimum_clearance_s <= 0:
             raise ValueError("at least eight candidates, one iteration, and positive settling time required")
-        self.rollout = BatchRollout(model, num_candidates, num_threads=num_threads)
+        self.rollout = BatchRollout(
+            model, num_candidates, substeps_per_control=substeps_per_control,
+            num_threads=num_threads,
+        )
         self.num_candidates = num_candidates
         self.iterations = iterations
         self.settle_s = settle_s
@@ -283,6 +292,17 @@ class StepMPC:
         data.qpos[:] = qpos
         data.qvel[:] = qvel
         mujoco.mj_forward(self.rollout.model, data)
+        swing_geom_id = self.rollout.model.geom(
+            f"foot_{state.swing_foot}_collisions"
+        ).id
+        swing_mesh_id = self.rollout.model.geom_dataid[swing_geom_id]
+        vertex_start = self.rollout.model.mesh_vertadr[swing_mesh_id]
+        vertex_count = self.rollout.model.mesh_vertnum[swing_mesh_id]
+        mesh_vertices = self.rollout.model.mesh_vert[vertex_start : vertex_start + vertex_count]
+        geom_rotation = data.geom_xmat[swing_geom_id].reshape(3, 3)
+        vertex_heights = mesh_vertices @ geom_rotation[2] + data.geom_xpos[swing_geom_id, 2]
+        sole_vertices = mesh_vertices[vertex_heights <= vertex_heights.min() + 0.001]
+        sole_reference_local = sole_vertices.mean(axis=0)
         observation: np.ndarray | None = None
         policy_offset: np.ndarray | None = None
         if self.warm_start_policy is not None:
@@ -314,8 +334,9 @@ class StepMPC:
         previous_offset = self.previous_offsets[state.swing_foot]
         if previous_offset is not None and previous_offset.shape != warm.shape:
             previous_offset = None
+        hold_seed = self.long_hold_offsets[state.swing_foot]
         long_hold_offset = (
-            self.long_hold_offsets[state.swing_foot]
+            hold_seed
             if self.minimum_clearance_s >= 1.0 and state.target_period_s >= 3.0
             else None
         )
@@ -323,15 +344,17 @@ class StepMPC:
             mean = policy_offset.copy()
         elif long_hold_offset is not None:
             mean = long_hold_offset.copy()
-        elif previous_offset is not None:
-            mean = previous_offset.copy()
         else:
             mean = warm.copy()
         deviation = np.full(warm.shape, 0.05 if policy_offset is not None else 0.15)
         elite_count = max(4, self.num_candidates // 16)
         best_cost = np.inf
         best_offset: np.ndarray | None = None
+        best_swing_path: np.ndarray | None = None
+        best_swing_clearance: np.ndarray | None = None
         best_clearance_duration_s = 0.0
+        preview_swing_paths: np.ndarray | None = None
+        preview_swing_clearance: np.ndarray | None = None
         for _ in range(self.iterations):
             offsets = np.clip(
                 self.rng.normal(mean, deviation, (self.num_candidates, len(warm))),
@@ -346,14 +369,22 @@ class StepMPC:
                 offsets[3] = previous_offset
             if policy_offset is not None:
                 offsets[4] = policy_offset
-            if long_hold_offset is not None:
-                offsets[5] = long_hold_offset
+            if hold_seed is not None:
+                offsets[5] = hold_seed
             targets = self.stand[None, None, :] + offsets[:, None, :6] * amplitude[None, :, None]
             targets += offsets[:, None, 6:12] * transfer_amplitude[None, :, None]
             hold_knots = offsets[:, 12:].reshape(self.num_candidates, HOLD_KNOTS, 6)
             targets += np.einsum("nkj,tk->ntj", hold_knots, hold_basis)
             self.rollout.set_state(qpos, qvel, ctrl, time_s=time_s)
             trace = self.rollout.rollout(targets, max_target_rate_rad_s=4.0)
+            swing_geom_pos = trace.foot_geom_pos_w[:, :, state.swing_foot]
+            swing_geom_rotation = trace.foot_geom_mat_w[
+                :, :, state.swing_foot
+            ].reshape(horizon, self.num_candidates, 3, 3)
+            swing_sole_paths = (
+                np.einsum("hnij,j->hni", swing_geom_rotation, sole_reference_local)
+                + swing_geom_pos
+            )
             costs = self._cost(trace, state.swing_foot, period_steps, preview)
             costs += 0.03 * np.sum(offsets[:, :6] ** 2, axis=1)
             costs += 0.02 * np.sum(offsets[:, 6:] ** 2, axis=1)
@@ -408,6 +439,20 @@ class StepMPC:
                 if costs[candidate] < best_cost:
                     best_cost = float(costs[candidate])
                     best_offset = offsets[candidate].copy()
+                    best_swing_path = swing_sole_paths[:, candidate].copy()
+                    best_swing_clearance = trace.foot_clearance_m[
+                        :, candidate, state.swing_foot
+                    ].copy()
+            preview_indices = np.linspace(
+                0,
+                self.num_candidates - 1,
+                min(12, self.num_candidates),
+                dtype=np.intp,
+            )
+            preview_swing_paths = swing_sole_paths[:, preview_indices].transpose(1, 0, 2).copy()
+            preview_swing_clearance = trace.foot_clearance_m[
+                :, preview_indices, state.swing_foot
+            ].T.copy()
             search_safe = base_safe & (clearance_duration >= min(0.1, self.minimum_clearance_s))
             search_indices = np.flatnonzero(search_safe)
             if len(search_indices):
@@ -417,15 +462,20 @@ class StepMPC:
                 elite = offsets[order[:elite_count]]
             mean = elite.mean(axis=0)
             deviation = np.maximum(0.015, elite.std(axis=0))
-        if best_offset is None:
+        if (
+            best_offset is None
+            or best_swing_path is None
+            or best_swing_clearance is None
+            or preview_swing_paths is None
+            or preview_swing_clearance is None
+        ):
             raise RuntimeError(
                 f"no MPC candidate achieved {self.minimum_clearance_s:.2f} s sustained lift, "
                 f"loaded support, and 2 mm foot clearance "
                 f"at {time_s:.2f} s; best safe-support clearance run was "
                 f"{best_clearance_duration_s:.2f} s"
             )
-        if best_cost < 2.0:
-            self.previous_offsets[state.swing_foot] = best_offset.copy()
+        self.previous_offsets[state.swing_foot] = best_offset.copy()
         if observation is None:
             observation = make_warm_start_observation(
                 self.rollout.model, qpos, qvel, ctrl, state
@@ -439,4 +489,9 @@ class StepMPC:
             best_offset[12:].reshape(HOLD_KNOTS, 6).copy(),
             best_cost,
             observation.copy(),
+            time_s,
+            preview_swing_paths,
+            preview_swing_clearance,
+            best_swing_path,
+            best_swing_clearance,
         )

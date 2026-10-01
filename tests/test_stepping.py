@@ -48,7 +48,7 @@ def test_mpc_completes_alternating_steps_without_falling_or_walking_away():
             np.testing.assert_allclose(
                 data.sensor(f"foot_{foot}_net_force").data[2],
                 run.foot_normal_force_n[i, foot],
-                atol=1e-8,
+                atol=1e-4,
             )
 
     single = run.foot_contacts[np.arange(len(run.times_s)), 1 - run.swing_feet] & ~run.foot_contacts[

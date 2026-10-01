@@ -14,6 +14,10 @@ zbot-mpc-smoke = "zbot_mpc_mjbatch.smoke:main"
 zbot-mpc-step = "zbot_mpc_mjbatch.stepping:main"
 zbot-mpc-visualize = "zbot_mpc_mjbatch.visualize:main"
 zbot-mpc-train-warmstart = "zbot_mpc_mjbatch.train_warmstart:main"
+zbot-mpc-periodic = "zbot_mpc_mjbatch.periodic:main"
+zbot-mpc-single-leg = "zbot_mpc_mjbatch.single_leg:main"
+zbot-mpc-single-leg-viewer = "zbot_mpc_mjbatch.single_leg_viewer:main"
+zbot-mpc-double-leg = "zbot_mpc_mjbatch.double_leg:main"
 
 [dependency-groups]
 dev = ["pytest", "ruff"]
